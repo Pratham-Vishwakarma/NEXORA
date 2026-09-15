@@ -53,6 +53,9 @@ def store(measurements: list[MeasurementIn]) -> list[int]:
             ids.append(cursor.lastrowid)
         return ids
 
+@app.get("/")
+def health() -> dict[str, str]:
+    return {"message": "Live"}
 
 @app.get("/health")
 def health() -> dict[str, str]:
