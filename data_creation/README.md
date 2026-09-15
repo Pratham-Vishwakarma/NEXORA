@@ -4,12 +4,21 @@ SQLite-backed middleware for collecting comparable network-test records from ESP
 
 ## Run
 
+From the repository root:
+
 ```powershell
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+python -m pip install -r data_creation/requirements.txt
+python -m uvicorn data_creation.middleware.main:app --reload
 ```
 
-The database is created at `data/adaptive_network.db`. Override this location with `DATABASE_PATH` when needed. Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
+Or, after changing into `data_creation`:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m uvicorn middleware.main:app --reload
+```
+
+The database is created at `data/adaptive_network.db`, relative to this project directory. For a local-only project, no configuration is required; the API creates the file automatically on first startup. Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
 
 ## Main endpoints
 

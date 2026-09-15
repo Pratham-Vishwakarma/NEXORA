@@ -6,8 +6,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app import database
-from app.main import app
+from data_creation.backend import database
+from data_creation.middleware.main import app
 
 
 class ApiTest(unittest.TestCase):

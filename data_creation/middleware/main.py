@@ -11,8 +11,15 @@ from typing import Annotated
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from .database import connection, initialise_database
-from .models import IngestResult, MeasurementIn, MeasurementOut, Protocol
+# Render can run this project either from the repository root
+# (``data_creation.middleware.main``) or with ``data_creation`` selected as
+# the service root (``middleware.main``). Support both import layouts.
+try:
+    from data_creation.backend.database import connection, initialise_database
+    from data_creation.middleware.models import IngestResult, MeasurementIn, MeasurementOut
+except ModuleNotFoundError:
+    from backend.database import connection, initialise_database
+    from middleware.models import IngestResult, MeasurementIn, MeasurementOut
 
 
 @asynccontextmanager

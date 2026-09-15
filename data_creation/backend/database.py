@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Iterator
 
 
-DATABASE_PATH = Path(os.getenv("DATABASE_PATH", "data/adaptive_network.db"))
+PROJECT_DIRECTORY = Path(__file__).resolve().parents[1]
+DATABASE_PATH = Path(
+    os.getenv("DATABASE_PATH", PROJECT_DIRECTORY / "data" / "adaptive_network.db")
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS measurements (
