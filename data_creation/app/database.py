@@ -94,3 +94,4 @@ def connection() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+        
