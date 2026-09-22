@@ -205,7 +205,7 @@ BAUD_RATE = 115200
 # ============================================================
 
 API_BASE_URL = (
-    "http://100.93.151.73:8000"
+    "http://100.72.37.28:8000"
 )
 
 
@@ -222,7 +222,7 @@ HTTP_TIMEOUT_SECONDS = 5
 # ============================================================
 
 FAILED_FILE = Path(
-    "data_feed/errors/failed_measurements.jsonl"
+    "E:/Projects/Project_Nexora/Data_Feed/errors/failed_measurements.jsonl"
 )
 
 
