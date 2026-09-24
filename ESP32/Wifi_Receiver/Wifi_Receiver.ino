@@ -1,11 +1,14 @@
 #include <WiFi.h>
+// Current/power sensing is performed on the sender ESP32.
+// Therefore no ACS712-specific receiver changes are required.
+
 #include <WiFiUdp.h>
 
 // ============================================================
 // WIFI CONFIGURATION
 // ============================================================
-const char* WIFI_SSID = "OneplusNord3";
-const char* WIFI_PASSWORD = "Thisismyhotspotpasskey@125940";
+const char* WIFI_SSID = "IoT Lab";
+const char* WIFI_PASSWORD = "iot108lab";
 const uint16_t LISTEN_PORT = 5005;
 
 // ============================================================
