@@ -25,18 +25,29 @@ bool deviceConnected = false;
 bool oldDeviceConnected = false;
 
 // ============================================================
+// PACKET STATISTICS
+// ============================================================
+
+uint32_t totalPackets = 0;
+uint32_t lastSequenceNumber = 0;
+uint32_t lostPackets = 0;
+uint32_t duplicatePackets = 0;
+
+// ============================================================
 // SERVER CALLBACKS
 // ============================================================
 
 class ServerCallbacks : public BLEServerCallbacks {
 
   void onConnect(BLEServer *pServer) override {
+
     deviceConnected = true;
 
     Serial.println("BLE_CONNECTED");
   }
 
   void onDisconnect(BLEServer *pServer) override {
+
     deviceConnected = false;
 
     Serial.println("BLE_DISCONNECTED");
@@ -49,30 +60,91 @@ class ServerCallbacks : public BLEServerCallbacks {
 
 class RxCallbacks : public BLECharacteristicCallbacks {
 
-  void onWrite(BLECharacteristic *pCharacteristic) override {
+  void onWrite(
+    BLECharacteristic *pCharacteristic
+  ) override {
 
-    std::string value = pCharacteristic->getValue();
+    // --------------------------------------------------------
+    // IMPORTANT:
+    //
+    // ESP32 BLE library version being used returns Arduino
+    // String from getValue().
+    // --------------------------------------------------------
 
-    if (value.length() < 4) {
+    String value =
+        pCharacteristic->getValue();
+
+    // --------------------------------------------------------
+    // Validate packet
+    //
+    // First 4 bytes contain uint32_t sequence number.
+    // --------------------------------------------------------
+
+    if (value.length() < sizeof(uint32_t)) {
+
+      Serial.print("RX_INVALID,");
+      Serial.println(value.length());
+
       return;
     }
 
     // --------------------------------------------------------
-    // Extract sequence number from first 4 bytes
+    // Extract sequence number
     // --------------------------------------------------------
 
     uint32_t sequenceNumber = 0;
 
     memcpy(
       &sequenceNumber,
-      value.data(),
+      value.c_str(),
       sizeof(sequenceNumber)
     );
 
-    uint32_t rxTimestamp = micros();
+    // --------------------------------------------------------
+    // Timestamp
+    // --------------------------------------------------------
+
+    uint32_t rxTimestamp =
+        micros();
 
     // --------------------------------------------------------
-    // Serial output
+    // Packet statistics
+    // --------------------------------------------------------
+
+    totalPackets++;
+
+    if (totalPackets > 1) {
+
+      // ------------------------------------------------------
+      // New packet after the previous packet
+      // ------------------------------------------------------
+
+      if (sequenceNumber > lastSequenceNumber + 1) {
+
+        lostPackets +=
+            sequenceNumber -
+            lastSequenceNumber -
+            1;
+      }
+
+      // ------------------------------------------------------
+      // Duplicate or old packet
+      // ------------------------------------------------------
+
+      else if (sequenceNumber <= lastSequenceNumber) {
+
+        duplicatePackets++;
+      }
+    }
+
+    if (sequenceNumber > lastSequenceNumber) {
+
+      lastSequenceNumber =
+          sequenceNumber;
+    }
+
+    // --------------------------------------------------------
+    // Print received packet information
     // --------------------------------------------------------
 
     Serial.print("RX,");
@@ -80,26 +152,40 @@ class RxCallbacks : public BLECharacteristicCallbacks {
     Serial.print(",");
     Serial.print(value.length());
     Serial.print(",");
-    Serial.println(rxTimestamp);
+    Serial.print(rxTimestamp);
+    Serial.print(",");
+    Serial.print(totalPackets);
+    Serial.print(",");
+    Serial.print(lostPackets);
+    Serial.print(",");
+    Serial.println(duplicatePackets);
 
     // --------------------------------------------------------
-    // ACK
+    // Send ACK
+    //
+    // ACK contains the same 4-byte sequence number.
     // --------------------------------------------------------
 
-    uint8_t ackPacket[4];
+    if (
+      pTxCharacteristic != nullptr &&
+      deviceConnected
+    ) {
 
-    memcpy(
-      ackPacket,
-      &sequenceNumber,
-      sizeof(sequenceNumber)
-    );
+      uint8_t ackPacket[sizeof(uint32_t)];
 
-    pTxCharacteristic->setValue(
-      ackPacket,
-      sizeof(ackPacket)
-    );
+      memcpy(
+        ackPacket,
+        &sequenceNumber,
+        sizeof(sequenceNumber)
+      );
 
-    pTxCharacteristic->notify();
+      pTxCharacteristic->setValue(
+        ackPacket,
+        sizeof(ackPacket)
+      );
+
+      pTxCharacteristic->notify();
+    }
   }
 };
 
@@ -115,37 +201,42 @@ void setup() {
 
   Serial.println();
   Serial.println("====================================");
-  Serial.println("NEXORA BLE RECEIVER");
+  Serial.println("      NEXORA BLE RECEIVER");
   Serial.println("====================================");
 
   // ----------------------------------------------------------
   // Initialize BLE
   // ----------------------------------------------------------
 
-  BLEDevice::init(DEVICE_NAME);
+  BLEDevice::init(
+    DEVICE_NAME
+  );
 
   // ----------------------------------------------------------
   // Create BLE server
   // ----------------------------------------------------------
 
-  pServer = BLEDevice::createServer();
+  pServer =
+      BLEDevice::createServer();
 
   pServer->setCallbacks(
     new ServerCallbacks()
   );
 
   // ----------------------------------------------------------
-  // Create service
+  // Create BLE service
   // ----------------------------------------------------------
 
   BLEService *pService =
-      pServer->createService(SERVICE_UUID);
+      pServer->createService(
+        SERVICE_UUID
+      );
 
-  // ----------------------------------------------------------
-  // RX characteristic
+  // ==========================================================
+  // RX CHARACTERISTIC
   //
   // Sender -> Receiver
-  // ----------------------------------------------------------
+  // ==========================================================
 
   BLECharacteristic *pRxCharacteristic =
       pService->createCharacteristic(
@@ -158,11 +249,12 @@ void setup() {
     new RxCallbacks()
   );
 
-  // ----------------------------------------------------------
-  // TX characteristic
+  // ==========================================================
+  // TX CHARACTERISTIC
   //
-  // Receiver -> Sender ACK
-  // ----------------------------------------------------------
+  // Receiver -> Sender
+  // Used for ACK notifications
+  // ==========================================================
 
   pTxCharacteristic =
       pService->createCharacteristic(
@@ -181,7 +273,7 @@ void setup() {
   pService->start();
 
   // ----------------------------------------------------------
-  // Start advertising
+  // Configure advertising
   // ----------------------------------------------------------
 
   BLEAdvertising *pAdvertising =
@@ -191,11 +283,26 @@ void setup() {
     SERVICE_UUID
   );
 
-  pAdvertising->setScanResponse(true);
+  pAdvertising->setScanResponse(
+    true
+  );
+
+  pAdvertising->setMinPreferred(
+    0x06
+  );
+
+  pAdvertising->setMinPreferred(
+    0x12
+  );
+
+  // ----------------------------------------------------------
+  // Start advertising
+  // ----------------------------------------------------------
 
   BLEDevice::startAdvertising();
 
   Serial.println("BLE_READY");
+  Serial.println("BLE_ADVERTISING");
   Serial.println("Waiting for sender...");
 }
 
@@ -206,10 +313,13 @@ void setup() {
 void loop() {
 
   // ----------------------------------------------------------
-  // Restart advertising after disconnect
+  // Detect disconnection
   // ----------------------------------------------------------
 
-  if (!deviceConnected && oldDeviceConnected) {
+  if (
+    !deviceConnected &&
+    oldDeviceConnected
+  ) {
 
     delay(500);
 
@@ -221,7 +331,14 @@ void loop() {
         deviceConnected;
   }
 
-  if (deviceConnected && !oldDeviceConnected) {
+  // ----------------------------------------------------------
+  // Detect new connection
+  // ----------------------------------------------------------
+
+  if (
+    deviceConnected &&
+    !oldDeviceConnected
+  ) {
 
     oldDeviceConnected =
         deviceConnected;
