@@ -4,8 +4,8 @@
 // ============================================================
 // Wi-Fi configuration
 // ============================================================
-const char* WIFI_SSID = "OneplusNord3";
-const char* WIFI_PASSWORD = "Thisismyhotspotpasskey@125940";
+const char* WIFI_SSID = "IoT Lab";
+const char* WIFI_PASSWORD = "iot108lab";
 
 // Receiver ESP32 IP
 IPAddress RECEIVER_IP(10, 51, 202, 223);
@@ -16,6 +16,30 @@ const uint16_t LOCAL_PORT = 5006;
 // Network / ACK configuration
 // ============================================================
 const uint32_t ACK_TIMEOUT_MS = 1000;
+
+// ============================================================
+// ACS712 CURRENT SENSOR CONFIGURATION
+// ============================================================
+//
+// Recommended ESP32 pin: GPIO34 (ADC1).
+// ADC1 is important because ADC2 is unavailable while Wi-Fi is active.
+//
+// This configuration assumes the common ACS712 5A module:
+//   sensitivity = 185 mV/A
+//   zero-current output ~= 2.5 V when sensor is powered from 5 V
+//
+// IMPORTANT:
+// Measure the ACS712 OUT voltage with ZERO load current and replace
+// ACS_ZERO_MV below with your measured value for best accuracy.
+//
+const int ACS712_PIN = 34;
+const float ACS_SENSITIVITY_MV_PER_A = 185.0f;
+const float ACS_ZERO_MV = 2500.0f;
+const uint16_t ACS_SAMPLES = 32;
+
+// Your measured load/supply voltage.
+// Used in Python to calculate experiment energy.
+const float LOAD_VOLTAGE_V = 3.3f;
 
 // ============================================================
 // Runtime experiment configuration
@@ -184,6 +208,32 @@ void handleSerialConfig() {
   Serial.println(WiFi.channel());
 }
 
+
+// ============================================================
+// Read ACS712 current
+// ============================================================
+//
+// Returns current magnitude in milliamps.
+// Multiple samples are averaged to reduce ESP32 ADC noise.
+//
+// Because this project measures load consumption rather than
+// bidirectional current flow, fabs() is used so sensor orientation
+// does not make the value negative.
+//
+float readCurrentMa() {
+  uint32_t totalMv = 0;
+
+  for (uint16_t i = 0; i < ACS_SAMPLES; i++) {
+    totalMv += analogReadMilliVolts(ACS712_PIN);
+    delayMicroseconds(100);
+  }
+
+  float averageMv = static_cast<float>(totalMv) / ACS_SAMPLES;
+  float currentA = fabsf(averageMv - ACS_ZERO_MV) / ACS_SENSITIVITY_MV_PER_A;
+
+  return currentA * 1000.0f;
+}
+
 // ============================================================
 // Print packet telemetry
 //
@@ -196,11 +246,12 @@ void handleSerialConfig() {
 // RTT,
 // success,
 // retries,
-// timestamp
+// timestamp,
+// current_ma
 //
 // Example:
 //
-// PKT,42,128,-63,6.00,1,0,49381
+// PKT,42,128,-63,6.00,1,0,49381,182.40
 // ============================================================
 
 void printPacketTelemetry(
@@ -210,7 +261,8 @@ void printPacketTelemetry(
     float rttMs,
     bool successful,
     uint16_t retries,
-    uint32_t timestampMs
+    uint32_t timestampMs,
+    float currentMa
 ) {
   Serial.print("PKT,");
   Serial.print(packetId);
@@ -225,7 +277,9 @@ void printPacketTelemetry(
   Serial.print(",");
   Serial.print(retries);
   Serial.print(",");
-  Serial.println(timestampMs);
+  Serial.print(timestampMs);
+  Serial.print(",");
+  Serial.println(currentMa, 2);
 }
 
 // ============================================================
@@ -233,6 +287,12 @@ void printPacketTelemetry(
 // ============================================================
 void setup() {
   Serial.begin(115200);
+
+  // ACS712 ADC setup.
+  // GPIO34 is ADC1 and remains usable while Wi-Fi is active.
+  analogReadResolution(12);
+  analogSetPinAttenuation(ACS712_PIN, ADC_11db);
+
   // Reduce readStringUntil() blocking time
   Serial.setTimeout(100);
   delay(1000);
@@ -274,6 +334,14 @@ void setup() {
   Serial.print("Maximum payload size: ");
   Serial.print(MAX_PAYLOAD_SIZE);
   Serial.println(" bytes");
+  Serial.print("ACS712 ADC pin: GPIO");
+  Serial.println(ACS712_PIN);
+  Serial.print("ACS712 zero-current voltage: ");
+  Serial.print(ACS_ZERO_MV, 1);
+  Serial.println(" mV");
+  Serial.print("Load voltage used for energy calculation: ");
+  Serial.print(LOAD_VOLTAGE_V, 2);
+  Serial.println(" V");
   Serial.println("Sender ready");
   Serial.println("Waiting for CONFIG command...");
 }
@@ -373,6 +441,11 @@ void loop() {
   int rssi = WiFi.RSSI();
 
   // ----------------------------------------------------------
+  // Read current drawn by the measured 3.3 V load
+  // ----------------------------------------------------------
+  float currentMa = readCurrentMa();
+
+  // ----------------------------------------------------------
   // Output raw telemetry to Python
   // ----------------------------------------------------------
   printPacketTelemetry(
@@ -382,7 +455,8 @@ void loop() {
     ackReceived ? rttMs : -1.0,
     ackReceived,
     retryCount,
-    millis()
+    millis(),
+    currentMa
   );
 
   // ----------------------------------------------------------

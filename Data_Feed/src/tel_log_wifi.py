@@ -53,7 +53,7 @@ MAX_PAYLOAD_BYTES = 2048
 # ============================================================
 #                PROTOCOL / DEVICE SETTINGS
 # ============================================================
-PROTOCOL = "BLUETOOTH"
+PROTOCOL = "WIFI"
 RADIO_FAMILY = "IEEE802.11"
 SOURCE_NODE = "ESP32_A"
 DESTINATION_NODE = "ESP32_B"
@@ -72,8 +72,8 @@ TX_POWER_DBM = None
 # ============================================================
 #                  POWER MEASUREMENTS
 # ============================================================
-BATTERY_VOLTAGE = None
-CURRENT_MA = None
+# Constant measured/load voltage requested for this experiment.
+SUPPLY_VOLTAGE_V = 3.3
 # ============================================================
 #                PROTOCOL-SPECIFIC VALUES
 # ============================================================
@@ -247,6 +247,7 @@ class PacketTelemetry:
     retries: int
 
     timestamp_ms: int
+    current_ma: float | None
 
 # ============================================================
 #                EXPERIMENT-ID GENERATION
@@ -315,11 +316,12 @@ def parse_packet_line(
     rtt_ms,
     successful,
     retries,
-    timestamp_ms
+    timestamp_ms,
+    current_ma
 
     Example:
 
-    PKT,42,128,-63,6.00,1,0,49381
+    PKT,42,128,-63,6.00,1,0,49381,182.40
     """
 
     if not line.startswith("PKT,"):
@@ -327,71 +329,47 @@ def parse_packet_line(
 
     parts = line.split(",")
 
-    if len(parts) != 8:
+    if len(parts) != 9:
         print(
-            f"[WARN] Expected 8 fields, "
+            f"[WARN] Expected 9 fields, "
             f"got {len(parts)}: {line}"
         )
-
         return None
 
     try:
-
-        packet_id = int(
-            parts[1]
-        )
-
-        payload_bytes = int(
-            parts[2]
-        )
-
-        rssi_dbm = float(
-            parts[3]
-        )
-
-        rtt_value = float(
-            parts[4]
-        )
-
-        successful = bool(
-            int(parts[5])
-        )
-
-        retries = int(
-            parts[6]
-        )
-
-        timestamp_ms = int(
-            parts[7]
-        )
+        packet_id = int(parts[1])
+        payload_bytes = int(parts[2])
+        rssi_dbm = float(parts[3])
+        rtt_value = float(parts[4])
+        successful = bool(int(parts[5]))
+        retries = int(parts[6])
+        timestamp_ms = int(parts[7])
+        current_value = float(parts[8])
 
         return PacketTelemetry(
             packet_id=packet_id,
-
             payload_bytes=payload_bytes,
-
             rssi_dbm=rssi_dbm,
-
             rtt_ms=(
                 None
                 if rtt_value < 0
                 else rtt_value
             ),
-
             successful=successful,
-
             retries=retries,
-
             timestamp_ms=timestamp_ms,
+            current_ma=(
+                None
+                if current_value < 0
+                else current_value
+            ),
         )
 
     except ValueError as exc:
-
         print(
             f"[WARN] Parse error: "
             f"{exc}: {line}"
         )
-
         return None
 
 # ============================================================
@@ -829,6 +807,40 @@ def build_measurement(
     )
 
 
+    # --------------------------------------------------------
+    # Power / energy
+    #
+    # Current is measured by the ACS712 on the sender.
+    #
+    # Using a constant load voltage of 3.3 V:
+    #
+    #   Power (mW) = Voltage (V) * Current (mA)
+    #   Energy (mJ) = Power (mW) * Time (s)
+    #
+    # Therefore:
+    #
+    #   Energy_mJ = 3.3 * mean_current_mA * duration_seconds
+    # --------------------------------------------------------
+
+    current_values = [
+        packet.current_ma
+        for packet in packets
+        if packet.current_ma is not None
+    ]
+
+    current_mean_ma = mean_or_none(
+        current_values
+    )
+
+    estimated_energy_mj = (
+        SUPPLY_VOLTAGE_V
+        * current_mean_ma
+        * duration_seconds
+        if current_mean_ma is not None
+        else None
+    )
+
+
     # ========================================================
     # DATABASE / FASTAPI PAYLOAD
     #
@@ -1061,13 +1073,13 @@ def build_measurement(
         # ----------------------------------------------------
 
         "battery_voltage":
-            BATTERY_VOLTAGE,
+            SUPPLY_VOLTAGE_V,
 
         "current_ma":
-            CURRENT_MA,
+            current_mean_ma,
 
         "estimated_energy_mj":
-            None,
+            estimated_energy_mj,
 
 
         # ----------------------------------------------------
@@ -1378,6 +1390,23 @@ def print_measurement_summary(
         f"{measurement['transfer_time_ms'] / 1000:.2f} s"
     )
 
+    if measurement["current_ma"] is not None:
+        print(
+            "Mean current  : "
+            f"{measurement['current_ma']:.2f} mA"
+        )
+
+    print(
+        "Supply voltage: "
+        f"{measurement['battery_voltage']:.2f} V"
+    )
+
+    if measurement["estimated_energy_mj"] is not None:
+        print(
+            "Est. energy   : "
+            f"{measurement['estimated_energy_mj']:.2f} mJ"
+        )
+
     print("=" * 68)
     print()
 
@@ -1489,7 +1518,8 @@ def collect_repetition(
             f"{status:<4s} "
             f"payload={packet.payload_bytes:<4d}B "
             f"RSSI={packet.rssi_dbm:6.1f} "
-            f"RTT={rtt_text:>9s}"
+            f"RTT={rtt_text:>9s} "
+            f"I={packet.current_ma:7.2f}mA"
         )
 
     window.stop()
