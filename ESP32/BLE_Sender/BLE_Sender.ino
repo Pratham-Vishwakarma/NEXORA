@@ -49,6 +49,7 @@ uint32_t ackSequence = 0;
 
 uint32_t sequenceNumber = 0;
 
+
 // ============================================================
 // NOTIFICATION CALLBACK
 // ============================================================
@@ -77,6 +78,7 @@ static void notifyCallback(
   ackReceived = true;
 }
 
+
 // ============================================================
 // BLE SCAN CALLBACK
 // ============================================================
@@ -89,35 +91,93 @@ class AdvertisedDeviceCallbacks :
   ) override {
 
     // --------------------------------------------------------
-    // Check service UUID
+    // Ignore devices without service UUID
+    // --------------------------------------------------------
+
+    if (!advertisedDevice.haveServiceUUID()) {
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Check NEXORA service UUID
     // --------------------------------------------------------
 
     if (
-      advertisedDevice.haveServiceUUID() &&
-      advertisedDevice.isAdvertisingService(
+      !advertisedDevice.isAdvertisingService(
         BLEUUID(SERVICE_UUID)
       )
     ) {
-
-      Serial.print("BLE_FOUND,");
-
-      if (advertisedDevice.haveName()) {
-        Serial.println(
-          advertisedDevice.getName().c_str()
-        );
-      } else {
-        Serial.println("UNKNOWN");
-      }
-
-      BLEDevice::getScan()->stop();
-
-      targetDevice =
-          new BLEAdvertisedDevice(
-            advertisedDevice
-          );
+      return;
     }
+
+    // --------------------------------------------------------
+    // Correct receiver found
+    // --------------------------------------------------------
+
+    Serial.println();
+    Serial.println("BLE_TARGET_FOUND");
+
+    Serial.print("BLE_ADDRESS,");
+
+    Serial.println(
+      advertisedDevice
+        .getAddress()
+        .toString()
+        .c_str()
+    );
+
+    Serial.print("BLE_NAME,");
+
+    if (advertisedDevice.haveName()) {
+
+      Serial.println(
+        advertisedDevice
+          .getName()
+          .c_str()
+      );
+
+    } else {
+
+      Serial.println("UNKNOWN");
+    }
+
+    Serial.print("BLE_RSSI,");
+
+    Serial.println(
+      advertisedDevice.getRSSI()
+    );
+
+    // --------------------------------------------------------
+    // Save discovered receiver BEFORE stopping scan
+    //
+    // Stopping the scanner may unblock pScan->start()
+    // immediately, so targetDevice must already be valid.
+    // --------------------------------------------------------
+
+    if (targetDevice != nullptr) {
+
+      delete targetDevice;
+
+      targetDevice = nullptr;
+    }
+
+    targetDevice =
+        new BLEAdvertisedDevice(
+          advertisedDevice
+        );
+
+    Serial.println(
+      "BLE_TARGET_SAVED"
+    );
+
+    // --------------------------------------------------------
+    // Stop scanning only after device is stored
+    // --------------------------------------------------------
+
+    BLEDevice::getScan()->stop();
   }
 };
+
 
 // ============================================================
 // CONNECT TO RECEIVER
@@ -125,35 +185,125 @@ class AdvertisedDeviceCallbacks :
 
 bool connectToReceiver() {
 
+  // ----------------------------------------------------------
+  // Validate discovered device
+  // ----------------------------------------------------------
+
   if (targetDevice == nullptr) {
+
+    Serial.println(
+      "BLE_CONNECT_FAIL,NO_TARGET"
+    );
+
     return false;
   }
 
+  Serial.println();
   Serial.println("BLE_CONNECTING");
+
+  Serial.print("BLE_CONNECT_ADDRESS,");
+
+  Serial.println(
+    targetDevice
+      ->getAddress()
+      .toString()
+      .c_str()
+  );
 
   // ----------------------------------------------------------
   // Create client
   // ----------------------------------------------------------
 
-  pClient =
-      BLEDevice::createClient();
+  if (pClient == nullptr) {
+
+    Serial.println(
+      "BLE_CLIENT_CREATING"
+    );
+
+    pClient =
+        BLEDevice::createClient();
+
+    if (pClient == nullptr) {
+
+      Serial.println(
+        "BLE_CLIENT_CREATE_FAIL"
+      );
+
+      return false;
+    }
+
+    Serial.println(
+      "BLE_CLIENT_CREATED"
+    );
+  }
+
+  // ----------------------------------------------------------
+  // Disconnect old connection if necessary
+  // ----------------------------------------------------------
+
+  if (pClient->isConnected()) {
+
+    Serial.println(
+      "BLE_OLD_CONNECTION_DISCONNECT"
+    );
+
+    pClient->disconnect();
+
+    delay(200);
+  }
 
   // ----------------------------------------------------------
   // Connect
   // ----------------------------------------------------------
 
-  if (!pClient->connect(targetDevice)) {
+  Serial.println(
+    "BLE_CONNECT_ATTEMPT"
+  );
 
-    Serial.println("BLE_CONNECT_FAIL");
+  bool connectionResult =
+      pClient->connect(
+        targetDevice
+      );
+
+  if (!connectionResult) {
+
+    Serial.println(
+      "BLE_CONNECT_FAIL"
+    );
+
+    connected = false;
 
     return false;
   }
 
-  Serial.println("BLE_CONNECTED");
+  Serial.println(
+    "BLE_CONNECTED"
+  );
+
+  delay(200);
+
+  // ----------------------------------------------------------
+  // Verify connection
+  // ----------------------------------------------------------
+
+  if (!pClient->isConnected()) {
+
+    Serial.println(
+      "BLE_CONNECTION_LOST"
+    );
+
+    connected = false;
+
+    return false;
+  }
 
   // ----------------------------------------------------------
   // Find service
   // ----------------------------------------------------------
+
+  Serial.println(
+    "BLE_SERVICE_SEARCH"
+  );
 
   BLERemoteService *pService =
       pClient->getService(
@@ -162,16 +312,29 @@ bool connectToReceiver() {
 
   if (pService == nullptr) {
 
-    Serial.println("BLE_SERVICE_FAIL");
+    Serial.println(
+      "BLE_SERVICE_NOT_FOUND"
+    );
 
     pClient->disconnect();
+
+    connected = false;
 
     return false;
   }
 
+  Serial.println(
+    "BLE_SERVICE_FOUND"
+  );
+
   // ----------------------------------------------------------
-  // Find RX
+  // Find RX characteristic
+  // Sender writes packets here
   // ----------------------------------------------------------
+
+  Serial.println(
+    "BLE_RX_SEARCH"
+  );
 
   pRxCharacteristic =
       pService->getCharacteristic(
@@ -180,16 +343,39 @@ bool connectToReceiver() {
 
   if (pRxCharacteristic == nullptr) {
 
-    Serial.println("BLE_RX_FAIL");
+    Serial.println(
+      "BLE_RX_NOT_FOUND"
+    );
 
     pClient->disconnect();
+
+    connected = false;
 
     return false;
   }
 
+  Serial.println(
+    "BLE_RX_FOUND"
+  );
+
+  Serial.print(
+    "BLE_RX_CAN_WRITE,"
+  );
+
+  Serial.println(
+    pRxCharacteristic->canWrite()
+      ? "YES"
+      : "NO"
+  );
+
   // ----------------------------------------------------------
-  // Find TX ACK
+  // Find TX characteristic
+  // Receiver sends ACK here
   // ----------------------------------------------------------
+
+  Serial.println(
+    "BLE_TX_SEARCH"
+  );
 
   pTxCharacteristic =
       pService->getCharacteristic(
@@ -198,12 +384,30 @@ bool connectToReceiver() {
 
   if (pTxCharacteristic == nullptr) {
 
-    Serial.println("BLE_TX_FAIL");
+    Serial.println(
+      "BLE_TX_NOT_FOUND"
+    );
 
     pClient->disconnect();
 
+    connected = false;
+
     return false;
   }
+
+  Serial.println(
+    "BLE_TX_FOUND"
+  );
+
+  Serial.print(
+    "BLE_TX_CAN_NOTIFY,"
+  );
+
+  Serial.println(
+    pTxCharacteristic->canNotify()
+      ? "YES"
+      : "NO"
+  );
 
   // ----------------------------------------------------------
   // Register ACK notification
@@ -211,17 +415,39 @@ bool connectToReceiver() {
 
   if (pTxCharacteristic->canNotify()) {
 
+    Serial.println(
+      "BLE_NOTIFY_REGISTERING"
+    );
+
     pTxCharacteristic->registerForNotify(
       notifyCallback
     );
+
+    Serial.println(
+      "BLE_NOTIFY_REGISTERED"
+    );
+
+  } else {
+
+    Serial.println(
+      "BLE_NOTIFY_NOT_SUPPORTED"
+    );
   }
+
+  // ----------------------------------------------------------
+  // Connection complete
+  // ----------------------------------------------------------
 
   connected = true;
 
-  Serial.println("BLE_READY");
+  Serial.println();
+  Serial.println(
+    "BLE_READY"
+  );
 
   return true;
 }
+
 
 // ============================================================
 // SCAN
@@ -229,14 +455,35 @@ bool connectToReceiver() {
 
 bool findReceiver() {
 
-  targetDevice = nullptr;
+  // ----------------------------------------------------------
+  // Clear previous target
+  // ----------------------------------------------------------
+
+  if (targetDevice != nullptr) {
+
+    delete targetDevice;
+
+    targetDevice = nullptr;
+  }
+
+  // ----------------------------------------------------------
+  // Get BLE scanner
+  // ----------------------------------------------------------
 
   BLEScan *pScan =
       BLEDevice::getScan();
 
+  // ----------------------------------------------------------
+  // Configure callbacks
+  // ----------------------------------------------------------
+
   pScan->setAdvertisedDeviceCallbacks(
     new AdvertisedDeviceCallbacks()
   );
+
+  // ----------------------------------------------------------
+  // Active scan required for scan-response data
+  // ----------------------------------------------------------
 
   pScan->setActiveScan(true);
 
@@ -244,15 +491,46 @@ bool findReceiver() {
 
   pScan->setWindow(99);
 
-  Serial.println("BLE_SCANNING");
+  // ----------------------------------------------------------
+  // Scan
+  // ----------------------------------------------------------
+
+  Serial.println();
+  Serial.println(
+    "BLE_SCANNING"
+  );
 
   pScan->start(
     5,
     false
   );
 
-  return targetDevice != nullptr;
+  // ----------------------------------------------------------
+  // Allow scan callback to finish completely
+  // ----------------------------------------------------------
+
+  delay(50);
+
+  // ----------------------------------------------------------
+  // Result
+  // ----------------------------------------------------------
+
+  if (targetDevice == nullptr) {
+
+    Serial.println(
+      "BLE_TARGET_NOT_FOUND"
+    );
+
+    return false;
+  }
+
+  Serial.println(
+    "BLE_SCAN_COMPLETE,TARGET_FOUND"
+  );
+
+  return true;
 }
+
 
 // ============================================================
 // SEND PACKET
@@ -265,6 +543,21 @@ void sendPacket() {
     pClient == nullptr ||
     !pClient->isConnected()
   ) {
+
+    connected = false;
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Validate RX characteristic
+  // ----------------------------------------------------------
+
+  if (pRxCharacteristic == nullptr) {
+
+    Serial.println(
+      "BLE_SEND_FAIL,NO_RX_CHARACTERISTIC"
+    );
 
     connected = false;
 
@@ -331,7 +624,8 @@ void sendPacket() {
   // Start RTT
   // ----------------------------------------------------------
 
-  uint32_t txStartUs = micros();
+  uint32_t txStartUs =
+      micros();
 
   // ----------------------------------------------------------
   // Transmit
@@ -411,8 +705,6 @@ void sendPacket() {
   // ==========================================================
   // SERIAL OUTPUT
   //
-  // SAME STYLE AS YOUR WIFI COLLECTOR
-  //
   // PKT,
   // sequence,
   // payload_size,
@@ -434,10 +726,11 @@ void sendPacket() {
   Serial.print(",");
   Serial.print(success);
   Serial.print(",");
-  Serial.print(0);             // retries
+  Serial.print(0);
   Serial.print(",");
   Serial.println(timestampUs);
 }
+
 
 // ============================================================
 // SERIAL CONFIGURATION
@@ -489,7 +782,9 @@ void handleSerial() {
             secondComma + 1
           ).toInt();
 
+      // --------------------------------------------------------
       // Safety
+      // --------------------------------------------------------
 
       if (payloadSize < 4) {
         payloadSize = 4;
@@ -503,7 +798,9 @@ void handleSerial() {
         packetIntervalMs = 10;
       }
 
-      // Same config response structure
+      // --------------------------------------------------------
+      // Config response
+      // --------------------------------------------------------
 
       Serial.print("CONFIG_OK,");
       Serial.print(payloadSize);
@@ -512,6 +809,7 @@ void handleSerial() {
     }
   }
 }
+
 
 // ============================================================
 // SETUP
@@ -528,12 +826,24 @@ void setup() {
   Serial.println("NEXORA BLE SENDER");
   Serial.println("====================================");
 
+  // ----------------------------------------------------------
+  // Initialize BLE
+  // ----------------------------------------------------------
+
+  Serial.println(
+    "BLE_INITIALIZING"
+  );
+
   BLEDevice::init(
     "NEXORA_BLE_TX"
   );
 
+  Serial.println(
+    "BLE_INITIALIZED"
+  );
+
   // ----------------------------------------------------------
-  // Search until receiver is found
+  // Search until receiver is found and connected
   // ----------------------------------------------------------
 
   while (!connected) {
@@ -545,7 +855,10 @@ void setup() {
       }
     }
 
-    Serial.println("BLE_RETRY");
+    Serial.println();
+    Serial.println(
+      "BLE_RETRY"
+    );
 
     delay(2000);
   }
@@ -559,6 +872,7 @@ void setup() {
   Serial.print(",");
   Serial.println(packetIntervalMs);
 }
+
 
 // ============================================================
 // LOOP
@@ -592,10 +906,19 @@ void loop() {
 
     connected = false;
 
+    pRxCharacteristic = nullptr;
+    pTxCharacteristic = nullptr;
+
     delay(500);
 
     if (findReceiver()) {
-      connectToReceiver();
+
+      if (!connectToReceiver()) {
+
+        Serial.println(
+          "BLE_RECONNECT_FAIL"
+        );
+      }
     }
 
     return;
