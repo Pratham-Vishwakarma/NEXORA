@@ -19,83 +19,25 @@ from serial import SerialException
 #                EXPERIMENT VARIABLES
 # ============================================================
 
+DISTANCE_M = 1.0
 
-# ------------------------------------------------------------
-# 1. DISTANCE
-# ------------------------------------------------------------
+PAYLOAD_BYTES = 2048
 
-DISTANCE_M = 0.0
-
-
-# ------------------------------------------------------------
-# 2. PAYLOAD SIZE
-#
-# Python sends this value to the ESP32 using:
-#
-# CONFIG,<payload_bytes>,<packet_interval_ms>
-#
-# BLE sender currently supports 4 - 240 bytes.
-# ------------------------------------------------------------
-
-PAYLOAD_BYTES = 16
-
-
-# ------------------------------------------------------------
-# 3. PACKET INTERVAL
-# ------------------------------------------------------------
-
-PACKET_INTERVAL_MS = 100
-
-
-# ------------------------------------------------------------
-# 4. ENVIRONMENT
-# ------------------------------------------------------------
+PACKET_INTERVAL_MS = 1000
 
 ENVIRONMENT = "INDOOR"
 
+LINE_OF_SIGHT = False
 
-# ------------------------------------------------------------
-# 5. VISIBILITY
-# ------------------------------------------------------------
-
-LINE_OF_SIGHT = True
-
-
-# ------------------------------------------------------------
-# 6. OBSTACLE
-# ------------------------------------------------------------
-
-OBSTACLE_TYPE = None
-
-
-# ------------------------------------------------------------
-# 7. TRAFFIC REQUIREMENT
-# ------------------------------------------------------------
+OBSTACLE_TYPE = "PEOPLE"
 
 TRAFFIC_REQUIREMENT = "TELEMETRY"
 
-
-# ------------------------------------------------------------
-# 8. TEST DURATION
-# ------------------------------------------------------------
-
 TEST_DURATION_SECONDS = 20
 
+REPETITIONS = 3
 
-# ------------------------------------------------------------
-# 9. REPETITIONS
-# ------------------------------------------------------------
-
-REPETITIONS = 1
-
-
-# ------------------------------------------------------------
-# Maximum supported application payload
-#
-# Must match BLE sender firmware.
-# ------------------------------------------------------------
-
-MAX_PAYLOAD_BYTES = 240
+MAX_PAYLOAD_BYTES = 2048
 
 
 # ============================================================
@@ -138,53 +80,25 @@ TX_POWER_DBM = None
 #                  POWER MEASUREMENTS
 # ============================================================
 
-BATTERY_VOLTAGE = None
-
-CURRENT_MA = None
+# Fixed voltage used for your ESP32 dataset.
+BATTERY_VOLTAGE = 3.3
 
 
 # ============================================================
 #                PROTOCOL-SPECIFIC VALUES
 # ============================================================
 
-
-# ------------------------------------------------------------
-# Wi-Fi
-# ------------------------------------------------------------
-
 WIFI_CHANNEL = None
-
-
-# ------------------------------------------------------------
-# BLE
-#
-# ESP32 BLE uses the LE 1M PHY for this implementation.
-# ------------------------------------------------------------
 
 BLE_PHY = "1M"
 
-
-# ------------------------------------------------------------
-# Bluetooth Classic
-# ------------------------------------------------------------
-
 BT_MODE = None
-
-
-# ------------------------------------------------------------
-# LoRa
-# ------------------------------------------------------------
 
 LORA_SF = None
 
 LORA_BW = None
 
 LORA_CR = None
-
-
-# ------------------------------------------------------------
-# Cellular
-# ------------------------------------------------------------
 
 CELLULAR_GENERATION = None
 
@@ -205,14 +119,12 @@ BAUD_RATE = 115200
 # ============================================================
 
 API_BASE_URL = (
-    "http://100.72.37.28:8000"
+    "http://100.120.114.19:8000"
 )
-
 
 MEASUREMENT_ENDPOINT = (
     f"{API_BASE_URL}/measurements"
 )
-
 
 HTTP_TIMEOUT_SECONDS = 5
 
@@ -231,64 +143,33 @@ FAILED_FILE = Path(
 #                  ESP32 CONFIGURATION
 # ============================================================
 
-# ============================================================
-#                  ESP32 CONFIGURATION
-# ============================================================
-
 def configure_esp32(
     ser: serial.Serial,
 ) -> None:
-
-    # ========================================================
-    # STEP 1:
-    # WAIT FOR BLE SENDER TO FINISH STARTUP
-    #
-    # Unlike Wi-Fi / Bluetooth Classic, the BLE sender does
-    # not enter loop() until:
-    #
-    #   scan
-    #   -> connect
-    #   -> service discovery
-    #   -> characteristic discovery
-    #   -> notification registration
-    #
-    # have completed.
-    #
-    # Therefore CONFIG must NOT be sent immediately after
-    # opening the serial port.
-    # ========================================================
 
     print(
         "[CONFIG] Waiting for BLE sender "
         "to become ready..."
     )
 
-
     startup_timeout_at = (
         time.monotonic()
         + 30
     )
 
-
     ble_ready = False
 
     initial_config_seen = False
-
 
     while (
         time.monotonic()
         < startup_timeout_at
     ):
 
-        raw = (
-            ser.readline()
-        )
-
+        raw = ser.readline()
 
         if not raw:
-
             continue
-
 
         line = (
             raw.decode(
@@ -298,25 +179,15 @@ def configure_esp32(
             .strip()
         )
 
-
         if not line:
-
             continue
-
 
         print(
             "[ESP]",
-            line
+            line,
         )
 
-
-        # ----------------------------------------------------
-        # Sender has completed BLE setup
-        # ----------------------------------------------------
-
-        if (
-            line == "BLE_READY"
-        ):
+        if line == "BLE_READY":
 
             ble_ready = True
 
@@ -325,18 +196,6 @@ def configure_esp32(
             )
 
             continue
-
-
-        # ----------------------------------------------------
-        # The sender prints its DEFAULT configuration once
-        # at the end of setup().
-        #
-        # Example:
-        #
-        # CONFIG_OK,16,500
-        #
-        # This is NOT confirmation of the Python command.
-        # ----------------------------------------------------
 
         if (
             ble_ready
@@ -354,22 +213,12 @@ def configure_esp32(
 
             break
 
-
-    # --------------------------------------------------------
-    # BLE_READY should normally always be seen.
-    #
-    # Requiring initial CONFIG_OK as well ensures we are
-    # definitely past setup() and inside loop(), where
-    # handleSerial() is active.
-    # --------------------------------------------------------
-
     if not ble_ready:
 
         raise RuntimeError(
             "BLE sender did not reach BLE_READY "
             "within 30 seconds"
         )
-
 
     if not initial_config_seen:
 
@@ -378,18 +227,11 @@ def configure_esp32(
             "configuration within 30 seconds"
         )
 
-
-    # ========================================================
-    # STEP 2:
-    # SEND THE ACTUAL EXPERIMENT CONFIGURATION
-    # ========================================================
-
     command = (
         f"CONFIG,"
         f"{PAYLOAD_BYTES},"
         f"{PACKET_INTERVAL_MS}\n"
     )
-
 
     print(
         f"[CONFIG] Sent -> "
@@ -397,42 +239,28 @@ def configure_esp32(
         f"interval={PACKET_INTERVAL_MS} ms"
     )
 
-
     ser.write(
         command.encode(
             "utf-8"
         )
     )
 
-
     ser.flush()
-
-
-    # ========================================================
-    # STEP 3:
-    # WAIT FOR CONFIRMATION OF THE COMMAND WE JUST SENT
-    # ========================================================
 
     confirmation_timeout_at = (
         time.monotonic()
         + 5
     )
 
-
     while (
         time.monotonic()
         < confirmation_timeout_at
     ):
 
-        raw = (
-            ser.readline()
-        )
-
+        raw = ser.readline()
 
         if not raw:
-
             continue
-
 
         line = (
             raw.decode(
@@ -442,48 +270,34 @@ def configure_esp32(
             .strip()
         )
 
-
         if not line:
-
             continue
-
 
         print(
             "[ESP]",
-            line
+            line,
         )
 
-
-        # ----------------------------------------------------
-        # Expected:
-        #
-        # CONFIG_OK,16,100
-        # ----------------------------------------------------
+        # PWR lines can appear while we wait for CONFIG_OK.
+        if line.startswith("PWR,"):
+            continue
 
         if line.startswith(
             "CONFIG_OK,"
         ):
 
-            parts = (
-                line.split(",")
-            )
+            parts = line.split(",")
 
-
-            if (
-                len(parts) != 3
-            ):
+            if len(parts) != 3:
 
                 print(
                     "[WARN] Invalid BLE "
                     "CONFIG_OK format:"
                 )
 
-                print(
-                    line
-                )
+                print(line)
 
                 continue
-
 
             try:
 
@@ -491,11 +305,9 @@ def configure_esp32(
                     parts[1]
                 )
 
-
                 confirmed_interval = int(
                     parts[2]
                 )
-
 
             except ValueError:
 
@@ -503,16 +315,9 @@ def configure_esp32(
                     "[WARN] Invalid CONFIG_OK values:"
                 )
 
-                print(
-                    line
-                )
+                print(line)
 
                 continue
-
-
-            # ------------------------------------------------
-            # Verify payload
-            # ------------------------------------------------
 
             if (
                 confirmed_payload
@@ -525,11 +330,6 @@ def configure_esp32(
                     f"ESP32={confirmed_payload}"
                 )
 
-
-            # ------------------------------------------------
-            # Verify packet interval
-            # ------------------------------------------------
-
             if (
                 confirmed_interval
                 != PACKET_INTERVAL_MS
@@ -541,29 +341,20 @@ def configure_esp32(
                     f"ESP32={confirmed_interval}"
                 )
 
-
             print(
                 "[CONFIG] Protocol: BLE"
             )
-
 
             print(
                 f"[CONFIG] BLE PHY: "
                 f"{BLE_PHY}"
             )
 
-
             print(
                 "[CONFIG] ESP32 configuration confirmed"
             )
 
-
             return
-
-
-        # ----------------------------------------------------
-        # Configuration rejected
-        # ----------------------------------------------------
 
         if line.startswith(
             "CONFIG_ERROR"
@@ -574,14 +365,14 @@ def configure_esp32(
                 f"{line}"
             )
 
-
     raise RuntimeError(
         "ESP32 did not confirm the requested "
         "configuration within 5 seconds"
     )
 
+
 # ============================================================
-#                   PACKET DATA MODEL
+#                   DATA MODELS
 # ============================================================
 
 @dataclass
@@ -598,6 +389,14 @@ class PacketTelemetry:
     successful: bool
 
     retries: int
+
+    timestamp_us: int
+
+
+@dataclass
+class PowerTelemetry:
+
+    current_ma: float
 
     timestamp_us: int
 
@@ -635,7 +434,6 @@ def build_experiment_id(
         else "nlos"
     )
 
-
     obstacle = (
         "none"
         if OBSTACLE_TYPE is None
@@ -643,7 +441,6 @@ def build_experiment_id(
             OBSTACLE_TYPE
         )
     )
-
 
     distance_text = (
         str(
@@ -654,7 +451,6 @@ def build_experiment_id(
             "p"
         )
     )
-
 
     return (
         f"{PROTOCOL.lower()}_"
@@ -671,7 +467,7 @@ def build_experiment_id(
 
 
 # ============================================================
-#                    SERIAL PARSER
+#                    SERIAL PARSERS
 # ============================================================
 
 def parse_packet_line(
@@ -689,73 +485,38 @@ def parse_packet_line(
     successful,
     retries,
     timestamp_us
-
-    Example:
-
-    PKT,42,16,-63,8.25,1,0,49381000
     """
-
 
     if not line.startswith(
         "PKT,"
     ):
-
         return None
 
+    parts = line.split(",")
 
-    parts = (
-        line.split(",")
-    )
-
-
-    if (
-        len(parts) != 8
-    ):
+    if len(parts) != 8:
 
         print(
-            f"[WARN] Expected 8 fields, "
+            f"[WARN] Expected 8 PKT fields, "
             f"got {len(parts)}: "
             f"{line}"
         )
 
-
         return None
 
-
     try:
-
-        # ----------------------------------------------------
-        # Packet ID
-        # ----------------------------------------------------
 
         packet_id = int(
             parts[1]
         )
 
-
-        # ----------------------------------------------------
-        # Payload size
-        # ----------------------------------------------------
-
         payload_bytes = int(
             parts[2]
         )
 
-
-        # ----------------------------------------------------
-        # BLE RSSI
-        #
-        # BLE sender obtains this using:
-        #
-        # pClient->getRssi()
-        #
-        # -127 is treated as unavailable.
-        # ----------------------------------------------------
-
         raw_rssi = float(
             parts[3]
         )
-
 
         rssi_dbm = (
             None
@@ -763,17 +524,9 @@ def parse_packet_line(
             else raw_rssi
         )
 
-
-        # ----------------------------------------------------
-        # RTT
-        #
-        # Negative RTT means ACK was not received.
-        # ----------------------------------------------------
-
         rtt_value = float(
             parts[4]
         )
-
 
         rtt_ms = (
             None
@@ -781,76 +534,104 @@ def parse_packet_line(
             else rtt_value
         )
 
-
-        # ----------------------------------------------------
-        # Packet success
-        # ----------------------------------------------------
-
         successful = bool(
             int(
                 parts[5]
             )
         )
 
-
-        # ----------------------------------------------------
-        # Retry count
-        #
-        # Current BLE sender reports zero.
-        # ----------------------------------------------------
-
         retries = int(
             parts[6]
         )
-
-
-        # ----------------------------------------------------
-        # ESP32 timestamp
-        #
-        # IMPORTANT:
-        #
-        # BLE sender uses micros(),
-        # therefore this is microseconds.
-        # ----------------------------------------------------
 
         timestamp_us = int(
             parts[7]
         )
 
-
         return PacketTelemetry(
 
-            packet_id=
-                packet_id,
+            packet_id=packet_id,
 
-            payload_bytes=
-                payload_bytes,
+            payload_bytes=payload_bytes,
 
-            rssi_dbm=
-                rssi_dbm,
+            rssi_dbm=rssi_dbm,
 
-            rtt_ms=
-                rtt_ms,
+            rtt_ms=rtt_ms,
 
-            successful=
-                successful,
+            successful=successful,
 
-            retries=
-                retries,
+            retries=retries,
 
-            timestamp_us=
-                timestamp_us,
+            timestamp_us=timestamp_us,
         )
-
 
     except ValueError as exc:
 
         print(
-            f"[WARN] Parse error: "
+            f"[WARN] PKT parse error: "
             f"{exc}: "
             f"{line}"
         )
 
+        return None
+
+
+def parse_power_line(
+    line: str,
+) -> PowerTelemetry | None:
+
+    """
+    Expected sender format:
+
+    PWR,current_ma,timestamp_us
+
+    Example:
+
+    PWR,82.417,49381000
+    """
+
+    if not line.startswith(
+        "PWR,"
+    ):
+        return None
+
+    parts = line.split(",")
+
+    if len(parts) != 3:
+
+        print(
+            f"[WARN] Expected 3 PWR fields, "
+            f"got {len(parts)}: "
+            f"{line}"
+        )
+
+        return None
+
+    try:
+
+        current_ma = float(
+            parts[1]
+        )
+
+        timestamp_us = int(
+            parts[2]
+        )
+
+        if current_ma < 0:
+            return None
+
+        return PowerTelemetry(
+            current_ma=current_ma,
+            timestamp_us=timestamp_us,
+        )
+
+    except ValueError as exc:
+
+        print(
+            f"[WARN] PWR parse error: "
+            f"{exc}: "
+            f"{line}"
+        )
 
         return None
 
@@ -869,33 +650,25 @@ class MeasurementWindow:
             PacketTelemetry
         ] = []
 
+        self.power_samples: list[
+            PowerTelemetry
+        ] = []
 
-        self.started_at: (
-            float | None
-        ) = None
+        self.started_at: float | None = None
 
-
-        self.finished_at: (
-            float | None
-        ) = None
-
+        self.finished_at: float | None = None
 
     def start(
         self,
     ) -> None:
 
         self.packets.clear()
+        self.power_samples.clear()
 
-
-        self.started_at = (
-            time.monotonic()
-        )
-
-
+        self.started_at = time.monotonic()
         self.finished_at = None
 
-
-    def add(
+    def add_packet(
         self,
         packet: PacketTelemetry,
     ) -> None:
@@ -904,40 +677,37 @@ class MeasurementWindow:
             packet
         )
 
+    def add_power_sample(
+        self,
+        sample: PowerTelemetry,
+    ) -> None:
+
+        self.power_samples.append(
+            sample
+        )
 
     def stop(
         self,
     ) -> None:
 
-        self.finished_at = (
-            time.monotonic()
-        )
-
+        self.finished_at = time.monotonic()
 
     @property
     def elapsed_seconds(
         self,
     ) -> float:
 
-        if (
-            self.started_at
-            is None
-        ):
-
+        if self.started_at is None:
             return 0.0
-
 
         end_time = (
             self.finished_at
-            if self.finished_at
-            is not None
+            if self.finished_at is not None
             else time.monotonic()
         )
 
-
         return max(
-            end_time
-            - self.started_at,
+            end_time - self.started_at,
             0.001,
         )
 
@@ -951,9 +721,7 @@ def mean_or_none(
 ) -> float | None:
 
     if not values:
-
         return None
-
 
     return statistics.fmean(
         values
@@ -964,18 +732,13 @@ def calculate_jitter(
     rtts: list[float],
 ) -> float | None:
 
-    if (
-        len(rtts) < 2
-    ):
-
+    if len(rtts) < 2:
         return None
-
 
     differences = [
 
         abs(
-            current
-            - previous
+            current - previous
         )
 
         for previous, current
@@ -985,9 +748,98 @@ def calculate_jitter(
         )
     ]
 
-
     return statistics.fmean(
         differences
+    )
+
+
+def calculate_power_statistics(
+    samples: list[PowerTelemetry],
+) -> tuple[
+    float | None,
+    float | None,
+]:
+
+    """
+    Returns:
+
+        (mean_current_ma, integrated_energy_mj)
+
+    Energy is integrated using the trapezoidal rule:
+
+        E(mJ) = V * integral(I_mA dt_seconds)
+
+    ESP32 micros() wraps after ~71.6 minutes. A 20-second
+    experiment is far below that, but the delta calculation below
+    still handles a single uint32 wrap correctly.
+    """
+
+    if not samples:
+        return None, None
+
+    current_values = [
+        sample.current_ma
+        for sample in samples
+    ]
+
+    mean_current_ma = statistics.fmean(
+        current_values
+    )
+
+    if len(samples) < 2:
+        return mean_current_ma, None
+
+    energy_mj = 0.0
+
+    for previous, current in zip(
+        samples,
+        samples[1:],
+    ):
+
+        previous_ts = previous.timestamp_us
+        current_ts = current.timestamp_us
+
+        if current_ts >= previous_ts:
+
+            delta_us = (
+                current_ts
+                - previous_ts
+            )
+
+        else:
+
+            # uint32 micros() wraparound
+            delta_us = (
+                (2**32 - previous_ts)
+                + current_ts
+            )
+
+        delta_seconds = (
+            delta_us /
+            1_000_000.0
+        )
+
+        # Reject clearly abnormal timestamp gaps.
+        if (
+            delta_seconds <= 0
+            or delta_seconds > 1.0
+        ):
+            continue
+
+        average_current_ma = (
+            previous.current_ma
+            + current.current_ma
+        ) / 2.0
+
+        energy_mj += (
+            BATTERY_VOLTAGE
+            * average_current_ma
+            * delta_seconds
+        )
+
+    return (
+        mean_current_ma,
+        energy_mj,
     )
 
 
@@ -998,113 +850,77 @@ def calculate_jitter(
 def validate_configuration(
 ) -> None:
 
-    if (
-        DISTANCE_M < 0
-    ):
+    if DISTANCE_M < 0:
 
         raise ValueError(
             "DISTANCE_M cannot be negative"
         )
 
-
-    # --------------------------------------------------------
-    # BLE packet must contain at least 4 bytes because
-    # bytes 0 - 3 contain the sequence number.
-    # --------------------------------------------------------
-
-    if (
-        PAYLOAD_BYTES < 4
-    ):
+    if PAYLOAD_BYTES < 4:
 
         raise ValueError(
             "PAYLOAD_BYTES must be >= 4 "
             "for the BLE sender"
         )
 
-
-    if (
-        PAYLOAD_BYTES
-        > MAX_PAYLOAD_BYTES
-    ):
+    if PAYLOAD_BYTES > MAX_PAYLOAD_BYTES:
 
         raise ValueError(
             f"PAYLOAD_BYTES must be <= "
             f"{MAX_PAYLOAD_BYTES}"
         )
 
-
-    if (
-        PACKET_INTERVAL_MS < 10
-    ):
+    if PACKET_INTERVAL_MS < 10:
 
         raise ValueError(
             "PACKET_INTERVAL_MS must be >= 10 "
             "for the current BLE sender"
         )
 
-
-    if (
-        TEST_DURATION_SECONDS <= 0
-    ):
+    if TEST_DURATION_SECONDS <= 0:
 
         raise ValueError(
             "TEST_DURATION_SECONDS must be > 0"
         )
 
-
-    if (
-        REPETITIONS < 1
-    ):
+    if REPETITIONS < 1:
 
         raise ValueError(
             "REPETITIONS must be >= 1"
         )
 
-
-    if (
-        ENVIRONMENT
-        not in {
-            "INDOOR",
-            "OPEN",
-        }
-    ):
+    if ENVIRONMENT not in {
+        "INDOOR",
+        "OPEN",
+    }:
 
         raise ValueError(
             "ENVIRONMENT must be "
             "'INDOOR' or 'OPEN'"
         )
 
-
-    if (
-        OBSTACLE_TYPE
-        not in {
-            None,
-            "WALL",
-            "PEOPLE",
-        }
-    ):
+    if OBSTACLE_TYPE not in {
+        None,
+        "WALL",
+        "PEOPLE",
+    }:
 
         raise ValueError(
             "OBSTACLE_TYPE must be "
             "None, 'WALL', or 'PEOPLE'"
         )
 
-
-    if (
-        TRAFFIC_REQUIREMENT
-        not in {
-            "TELEMETRY",
-            "INTERACTIVE",
-            "BULK",
-        }
-    ):
+    if TRAFFIC_REQUIREMENT not in {
+        "TELEMETRY",
+        "INTERACTIVE",
+        "BULK",
+    }:
 
         raise ValueError(
             "TRAFFIC_REQUIREMENT must be "
             "'TELEMETRY', 'INTERACTIVE', "
             "or 'BULK'"
         )
-
 
     if not BLE_PHY:
 
@@ -1122,10 +938,6 @@ def validate_packet_configuration(
     packet: PacketTelemetry,
 ) -> bool:
 
-    # --------------------------------------------------------
-    # Validate Python payload range
-    # --------------------------------------------------------
-
     if not (
         4
         <= PAYLOAD_BYTES
@@ -1133,34 +945,23 @@ def validate_packet_configuration(
     ):
 
         print()
-
-
         print(
             "[INVALID PYTHON CONFIGURATION]"
         )
-
 
         print(
             f"PAYLOAD_BYTES must be between "
             f"4 and {MAX_PAYLOAD_BYTES}"
         )
 
-
         print(
             f"Current PAYLOAD_BYTES : "
             f"{PAYLOAD_BYTES}"
         )
 
-
         print()
 
-
         return False
-
-
-    # --------------------------------------------------------
-    # Verify sender payload
-    # --------------------------------------------------------
 
     if (
         packet.payload_bytes
@@ -1168,36 +969,28 @@ def validate_packet_configuration(
     ):
 
         print()
-
-
         print(
             "[CONFIGURATION MISMATCH]"
         )
-
 
         print(
             f"Python PAYLOAD_BYTES : "
             f"{PAYLOAD_BYTES}"
         )
 
-
         print(
             f"ESP32 payload        : "
             f"{packet.payload_bytes}"
         )
-
 
         print(
             "The packet will NOT be "
             "added to the experiment."
         )
 
-
         print()
 
-
         return False
-
 
     return True
 
@@ -1211,10 +1004,7 @@ def build_measurement(
     repetition: int,
 ) -> dict:
 
-    packets = (
-        window.packets
-    )
-
+    packets = window.packets
 
     if not packets:
 
@@ -1222,26 +1012,12 @@ def build_measurement(
             "No packets collected"
         )
 
-
-    # --------------------------------------------------------
-    # Validate payload consistency
-    # --------------------------------------------------------
-
     actual_payload_sizes = {
-
         packet.payload_bytes
-
-        for packet
-        in packets
+        for packet in packets
     }
 
-
-    if (
-        len(
-            actual_payload_sizes
-        )
-        != 1
-    ):
+    if len(actual_payload_sizes) != 1:
 
         raise ValueError(
             "Mixed payload sizes detected "
@@ -1249,20 +1025,13 @@ def build_measurement(
             f"{actual_payload_sizes}"
         )
 
-
-    actual_payload_bytes = (
-        next(
-            iter(
-                actual_payload_sizes
-            )
+    actual_payload_bytes = next(
+        iter(
+            actual_payload_sizes
         )
     )
 
-
-    if (
-        actual_payload_bytes
-        != PAYLOAD_BYTES
-    ):
+    if actual_payload_bytes != PAYLOAD_BYTES:
 
         raise ValueError(
             f"Python configured "
@@ -1271,37 +1040,24 @@ def build_measurement(
             f"{actual_payload_bytes} B"
         )
 
-
-    # --------------------------------------------------------
-    # Packet counts
-    # --------------------------------------------------------
-
     packets_sent = len(
         packets
     )
 
-
     successful_packets = [
-
         packet
-
-        for packet
-        in packets
-
+        for packet in packets
         if packet.successful
     ]
-
 
     packets_received = len(
         successful_packets
     )
 
-
     packets_lost = (
         packets_sent
         - packets_received
     )
-
 
     packet_loss_pct = (
         packets_lost
@@ -1309,95 +1065,50 @@ def build_measurement(
         * 100.0
     )
 
-
-    # --------------------------------------------------------
-    # RSSI
-    # --------------------------------------------------------
-
     rssi_values = [
-
         packet.rssi_dbm
-
-        for packet
-        in packets
-
-        if packet.rssi_dbm
-        is not None
+        for packet in packets
+        if packet.rssi_dbm is not None
     ]
 
-
-    rssi_mean = (
-        mean_or_none(
-            rssi_values
-        )
+    rssi_mean = mean_or_none(
+        rssi_values
     )
-
-
-    # --------------------------------------------------------
-    # RTT / latency
-    # --------------------------------------------------------
 
     rtts = [
-
         packet.rtt_ms
-
-        for packet
-        in successful_packets
-
-        if packet.rtt_ms
-        is not None
+        for packet in successful_packets
+        if packet.rtt_ms is not None
     ]
 
-
-    latency_mean = (
-        mean_or_none(
-            rtts
-        )
+    latency_mean = mean_or_none(
+        rtts
     )
-
 
     latency_min = (
-        min(
-            rtts
-        )
+        min(rtts)
         if rtts
         else None
     )
-
 
     latency_max = (
-        max(
-            rtts
-        )
+        max(rtts)
         if rtts
         else None
     )
 
-
-    jitter = (
-        calculate_jitter(
-            rtts
-        )
+    jitter = calculate_jitter(
+        rtts
     )
-
-
-    # --------------------------------------------------------
-    # Application payload throughput
-    # --------------------------------------------------------
 
     successful_bytes = sum(
-
         packet.payload_bytes
-
-        for packet
-        in successful_packets
+        for packet in successful_packets
     )
-
 
     duration_seconds = (
         window.elapsed_seconds
     )
-
 
     throughput_kbps = (
         successful_bytes
@@ -1406,349 +1117,185 @@ def build_measurement(
         / 1000
     )
 
-
-    # --------------------------------------------------------
-    # Retry count
-    #
-    # Current BLE sender reports zero retries, but retaining
-    # the field keeps the dataset/API schema identical.
-    # --------------------------------------------------------
-
     total_retries = sum(
-
         packet.retries
-
-        for packet
-        in packets
+        for packet in packets
     )
-
-
-    # --------------------------------------------------------
-    # Overall experiment success
-    # --------------------------------------------------------
 
     successful = (
         packets_received > 0
     )
 
+    # ========================================================
+    # POWER / ENERGY
+    # ========================================================
 
-    # ========================================================
-    # DATABASE / FASTAPI PAYLOAD
-    # ========================================================
+    (
+        current_mean_ma,
+        estimated_energy_mj,
+    ) = calculate_power_statistics(
+        window.power_samples
+    )
 
     return {
-
-        # ----------------------------------------------------
-        # Identification
-        # ----------------------------------------------------
 
         "timestamp":
             datetime.now(
                 timezone.utc
             ).isoformat(),
 
-
         "experiment_id":
             build_experiment_id(
                 repetition
             ),
 
-
         "protocol":
             PROTOCOL,
-
 
         "radio_family":
             RADIO_FAMILY,
 
-
         "source_node":
             SOURCE_NODE,
-
 
         "destination_node":
             DESTINATION_NODE,
 
-
-        # ----------------------------------------------------
-        # Distance
-        # ----------------------------------------------------
-
         "distance_m":
             DISTANCE_M,
-
-
-        # ----------------------------------------------------
-        # Environment
-        # ----------------------------------------------------
 
         "environment":
             ENVIRONMENT,
 
-
-        # ----------------------------------------------------
-        # Visibility
-        # ----------------------------------------------------
-
         "line_of_sight":
             LINE_OF_SIGHT,
-
-
-        # ----------------------------------------------------
-        # Obstacle
-        # ----------------------------------------------------
 
         "obstacle_type":
             OBSTACLE_TYPE,
 
-
-        # ----------------------------------------------------
-        # Additional physical metadata
-        # ----------------------------------------------------
-
         "mobility":
             MOBILITY,
-
 
         "interference_level":
             INTERFERENCE_LEVEL,
 
-
-        # ----------------------------------------------------
-        # Payload
-        # ----------------------------------------------------
-
         "payload_bytes":
             actual_payload_bytes,
-
-
-        # ----------------------------------------------------
-        # Packet interval
-        # ----------------------------------------------------
 
         "packet_interval_ms":
             PACKET_INTERVAL_MS,
 
-
-        # ----------------------------------------------------
-        # Number of packets measured
-        # ----------------------------------------------------
-
         "packet_count":
             packets_sent,
-
-
-        # ----------------------------------------------------
-        # Traffic requirement
-        # ----------------------------------------------------
 
         "traffic_type":
             TRAFFIC_REQUIREMENT,
 
-
-        # ----------------------------------------------------
-        # Application requirements
-        # ----------------------------------------------------
-
         "qos_priority":
             QOS_PRIORITY,
-
 
         "required_latency_ms":
             REQUIRED_LATENCY_MS,
 
-
         "required_throughput_kbps":
             REQUIRED_THROUGHPUT_KBPS,
-
 
         "reliability_requirement":
             RELIABILITY_REQUIREMENT,
 
-
         "power_priority":
             POWER_PRIORITY,
-
 
         "range_requirement_m":
             RANGE_REQUIREMENT_M,
 
-
-        # ----------------------------------------------------
-        # Radio measurements
-        # ----------------------------------------------------
-
         "rssi_dbm":
             rssi_mean,
-
 
         "snr_db":
             None,
 
-
         "link_quality":
             None,
-
 
         "tx_power_dbm":
             TX_POWER_DBM,
 
-
-        # ----------------------------------------------------
-        # Reliability measurements
-        # ----------------------------------------------------
-
         "packets_sent":
             packets_sent,
-
 
         "packets_received":
             packets_received,
 
-
         "packets_lost":
             packets_lost,
-
 
         "packet_loss_pct":
             packet_loss_pct,
 
-
-        # ----------------------------------------------------
-        # Latency
-        #
-        # Individual BLE RTT values are aggregated into the
-        # experiment latency statistics.
-        # ----------------------------------------------------
-
         "rtt_ms":
             latency_mean,
-
 
         "latency_mean_ms":
             latency_mean,
 
-
         "latency_min_ms":
             latency_min,
-
 
         "latency_max_ms":
             latency_max,
 
-
         "jitter_ms":
             jitter,
 
-
-        # ----------------------------------------------------
-        # Throughput
-        # ----------------------------------------------------
-
         "throughput_kbps":
             throughput_kbps,
-
-
-        # ----------------------------------------------------
-        # Experiment duration
-        # ----------------------------------------------------
 
         "transfer_time_ms":
             duration_seconds
             * 1000.0,
 
-
-        # ----------------------------------------------------
-        # Reliability / connection
-        # ----------------------------------------------------
-
         "retries":
             total_retries,
-
 
         "connection_setup_ms":
             None,
 
-
         "disconnect_count":
             None,
-
-
-        # ----------------------------------------------------
-        # Power
-        # ----------------------------------------------------
 
         "battery_voltage":
             BATTERY_VOLTAGE,
 
-
         "current_ma":
-            CURRENT_MA,
-
+            current_mean_ma,
 
         "estimated_energy_mj":
-            None,
-
-
-        # ----------------------------------------------------
-        # Wi-Fi-specific
-        #
-        # Must be NULL for BLE.
-        # ----------------------------------------------------
+            estimated_energy_mj,
 
         "wifi_channel":
             WIFI_CHANNEL,
 
-
-        # ----------------------------------------------------
-        # BLE-specific
-        # ----------------------------------------------------
-
         "ble_phy":
             BLE_PHY,
-
-
-        # ----------------------------------------------------
-        # Bluetooth Classic-specific
-        #
-        # Must be NULL for BLE.
-        # ----------------------------------------------------
 
         "bt_mode":
             BT_MODE,
 
-
-        # ----------------------------------------------------
-        # LoRa-specific
-        # ----------------------------------------------------
-
         "lora_sf":
             LORA_SF,
-
 
         "lora_bw":
             LORA_BW,
 
-
         "lora_cr":
             LORA_CR,
-
-
-        # ----------------------------------------------------
-        # Cellular-specific
-        # ----------------------------------------------------
 
         "cellular_generation":
             CELLULAR_GENERATION,
 
-
         "cell_signal_dbm":
             CELL_SIGNAL_DBM,
-
-
-        # ----------------------------------------------------
-        # Overall status
-        # ----------------------------------------------------
 
         "successful":
             successful,
@@ -1772,29 +1319,21 @@ def check_api(
                 HTTP_TIMEOUT_SECONDS,
         )
 
-
-        if (
-            response.status_code
-            == 200
-        ):
+        if response.status_code == 200:
 
             print(
                 "[API] Connected:",
                 response.json(),
             )
 
-
             return True
-
 
         print(
             "[API] Health check failed:",
             response.status_code,
         )
 
-
         return False
-
 
     except requests.RequestException as exc:
 
@@ -1802,7 +1341,6 @@ def check_api(
             "[API] Cannot reach API:",
             exc,
         )
-
 
         return False
 
@@ -1821,28 +1359,19 @@ def send_measurement(
 
             MEASUREMENT_ENDPOINT,
 
-            json=
-                measurement,
+            json=measurement,
 
             timeout=
                 HTTP_TIMEOUT_SECONDS,
         )
 
+        if response.status_code == 201:
 
-        if (
-            response.status_code
-            == 201
-        ):
-
-            result = (
-                response.json()
-            )
-
+            result = response.json()
 
             print(
                 "[DB] Stored successfully."
             )
-
 
             print(
                 "[DB] ID(s):",
@@ -1851,26 +1380,19 @@ def send_measurement(
                 ),
             )
 
-
             return True
 
-
         print()
-
-
         print(
             "[API ERROR]",
             response.status_code,
         )
 
-
         print(
             response.text
         )
 
-
         return False
-
 
     except requests.RequestException as exc:
 
@@ -1878,7 +1400,6 @@ def send_measurement(
             "[API ERROR]",
             exc,
         )
-
 
         return False
 
@@ -1891,34 +1412,22 @@ def save_failed_measurement(
     measurement: dict,
 ) -> None:
 
-    # --------------------------------------------------------
-    # Ensure backup directory exists
-    # --------------------------------------------------------
-
     FAILED_FILE.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-
     with FAILED_FILE.open(
-
         "a",
-
-        encoding=
-            "utf-8",
-
+        encoding="utf-8",
     ) as file:
 
         file.write(
-
             json.dumps(
                 measurement
             )
-
             + "\n"
         )
-
 
     print(
         "[BACKUP] Saved measurement to",
@@ -1934,64 +1443,44 @@ def print_experiment_configuration(
 ) -> None:
 
     print()
-
-
-    print(
-        "=" * 68
-    )
-
-
-    print(
-        "ADAPTIVE IoT NETWORK EXPERIMENT"
-    )
-
-
-    print(
-        "=" * 68
-    )
-
+    print("=" * 68)
+    print("ADAPTIVE IoT NETWORK EXPERIMENT")
+    print("=" * 68)
 
     print(
         f"Protocol             : "
         f"{PROTOCOL}"
     )
 
-
     print(
         f"Radio family         : "
         f"{RADIO_FAMILY}"
     )
-
 
     print(
         f"BLE PHY              : "
         f"{BLE_PHY}"
     )
 
-
     print(
         f"Distance             : "
         f"{DISTANCE_M} m"
     )
-
 
     print(
         f"Payload              : "
         f"{PAYLOAD_BYTES} bytes"
     )
 
-
     print(
         f"Packet interval      : "
         f"{PACKET_INTERVAL_MS} ms"
     )
 
-
     print(
         f"Environment          : "
         f"{ENVIRONMENT}"
     )
-
 
     print(
         "Visibility           : "
@@ -2002,36 +1491,32 @@ def print_experiment_configuration(
         )
     )
 
-
     print(
         f"Obstacle             : "
         f"{OBSTACLE_TYPE or 'NONE'}"
     )
-
 
     print(
         f"Traffic requirement  : "
         f"{TRAFFIC_REQUIREMENT}"
     )
 
-
     print(
         f"Test duration        : "
         f"{TEST_DURATION_SECONDS} seconds"
     )
-
 
     print(
         f"Repetitions          : "
         f"{REPETITIONS}"
     )
 
-
     print(
-        "=" * 68
+        f"Power voltage        : "
+        f"{BATTERY_VOLTAGE:.2f} V"
     )
 
-
+    print("=" * 68)
     print()
 
 
@@ -2045,12 +1530,7 @@ def print_measurement_summary(
 ) -> None:
 
     print()
-
-
-    print(
-        "=" * 68
-    )
-
+    print("=" * 68)
 
     print(
         f"RESULT — REPETITION "
@@ -2058,24 +1538,20 @@ def print_measurement_summary(
         f"{REPETITIONS}"
     )
 
-
     print(
         f"Experiment ID : "
         f"{measurement['experiment_id']}"
     )
-
 
     print(
         f"Protocol      : "
         f"{measurement['protocol']}"
     )
 
-
     print(
         f"BLE PHY       : "
         f"{measurement['ble_phy']}"
     )
-
 
     print(
         "Packets       : "
@@ -2084,25 +1560,17 @@ def print_measurement_summary(
         f"{measurement['packets_sent']}"
     )
 
-
     print(
         "Packet loss   : "
         f"{measurement['packet_loss_pct']:.2f}%"
     )
 
-
-    if (
-        measurement[
-            "rssi_dbm"
-        ]
-        is not None
-    ):
+    if measurement["rssi_dbm"] is not None:
 
         print(
             "Mean RSSI     : "
             f"{measurement['rssi_dbm']:.2f} dBm"
         )
-
 
     else:
 
@@ -2110,19 +1578,12 @@ def print_measurement_summary(
             "Mean RSSI     : N/A"
         )
 
-
-    if (
-        measurement[
-            "latency_mean_ms"
-        ]
-        is not None
-    ):
+    if measurement["latency_mean_ms"] is not None:
 
         print(
             "Mean RTT      : "
             f"{measurement['latency_mean_ms']:.2f} ms"
         )
-
 
     else:
 
@@ -2130,19 +1591,12 @@ def print_measurement_summary(
             "Mean RTT      : N/A"
         )
 
-
-    if (
-        measurement[
-            "jitter_ms"
-        ]
-        is not None
-    ):
+    if measurement["jitter_ms"] is not None:
 
         print(
             "Jitter        : "
             f"{measurement['jitter_ms']:.2f} ms"
         )
-
 
     else:
 
@@ -2150,24 +1604,53 @@ def print_measurement_summary(
             "Jitter        : N/A"
         )
 
-
     print(
         "Throughput    : "
         f"{measurement['throughput_kbps']:.3f} kbps"
     )
 
+    print(
+        "Voltage       : "
+        f"{measurement['battery_voltage']:.2f} V"
+    )
+
+    if measurement["current_ma"] is not None:
+
+        print(
+            "Mean current  : "
+            f"{measurement['current_ma']:.2f} mA"
+        )
+
+    else:
+
+        print(
+            "Mean current  : N/A"
+        )
+
+    if measurement["estimated_energy_mj"] is not None:
+
+        print(
+            "Energy        : "
+            f"{measurement['estimated_energy_mj']:.2f} mJ"
+        )
+
+    else:
+
+        print(
+            "Energy        : N/A"
+        )
+
+    print(
+        "Power samples : "
+        f"{measurement.get('_power_sample_count', 'N/A')}"
+    )
 
     print(
         "Test duration : "
         f"{measurement['transfer_time_ms'] / 1000:.2f} s"
     )
 
-
-    print(
-        "=" * 68
-    )
-
-
+    print("=" * 68)
     print()
 
 
@@ -2180,30 +1663,21 @@ def collect_repetition(
     repetition: int,
 ) -> MeasurementWindow:
 
-    window = (
-        MeasurementWindow()
-    )
+    window = MeasurementWindow()
 
-
-    # --------------------------------------------------------
-    # Clear stale serial output
-    # --------------------------------------------------------
-
+    # Clear stale PWR / PKT records so the experiment begins
+    # from a clean serial window.
     ser.reset_input_buffer()
-
 
     window.start()
 
-
     print()
-
 
     print(
         f"[TEST] Starting repetition "
         f"{repetition}/"
         f"{REPETITIONS}"
     )
-
 
     print(
         "[TEST]",
@@ -2212,33 +1686,30 @@ def collect_repetition(
         ),
     )
 
-
     print(
         f"[TEST] Duration: "
         f"{TEST_DURATION_SECONDS}s"
     )
-
 
     print(
         f"[TEST] BLE PHY: "
         f"{BLE_PHY}"
     )
 
+    print(
+        f"[TEST] Power voltage: "
+        f"{BATTERY_VOLTAGE:.2f} V"
+    )
 
     while (
         window.elapsed_seconds
         < TEST_DURATION_SECONDS
     ):
 
-        raw = (
-            ser.readline()
-        )
-
+        raw = ser.readline()
 
         if not raw:
-
             continue
-
 
         line = (
             raw.decode(
@@ -2248,117 +1719,92 @@ def collect_repetition(
             .strip()
         )
 
-
         if not line:
+            continue
+
+        # ----------------------------------------------------
+        # Continuous current sample
+        # ----------------------------------------------------
+
+        if line.startswith(
+            "PWR,"
+        ):
+
+            power_sample = parse_power_line(
+                line
+            )
+
+            if power_sample is not None:
+
+                window.add_power_sample(
+                    power_sample
+                )
 
             continue
 
-
         # ----------------------------------------------------
-        # ESP32 debug / connection messages
-        #
-        # Examples:
-        #
-        # BLE_CONNECTED
-        # BLE_SCANNING
-        # BLE_TARGET_FOUND
-        # BLE_READY
+        # Packet telemetry
         # ----------------------------------------------------
 
-        if not line.startswith(
+        if line.startswith(
             "PKT,"
         ):
 
-            print(
-                "[ESP]",
-                line,
-            )
-
-
-            continue
-
-
-        # ----------------------------------------------------
-        # Parse PKT line
-        # ----------------------------------------------------
-
-        packet = (
-            parse_packet_line(
+            packet = parse_packet_line(
                 line
             )
-        )
 
+            if packet is None:
+                continue
 
-        if (
-            packet is None
-        ):
+            if not validate_packet_configuration(
+                packet
+            ):
+                continue
+
+            window.add_packet(
+                packet
+            )
+
+            status = (
+                "OK"
+                if packet.successful
+                else "LOST"
+            )
+
+            rtt_text = (
+                f"{packet.rtt_ms:.2f}ms"
+                if packet.rtt_ms is not None
+                else "-"
+            )
+
+            rssi_text = (
+                f"{packet.rssi_dbm:.1f}dBm"
+                if packet.rssi_dbm is not None
+                else "N/A"
+            )
+
+            print(
+                f"[PKT] "
+                f"id={packet.packet_id:<6d} "
+                f"{status:<4s} "
+                f"payload={packet.payload_bytes:<4d}B "
+                f"RSSI={rssi_text:>9s} "
+                f"RTT={rtt_text:>9s}"
+            )
 
             continue
 
-
         # ----------------------------------------------------
-        # Prevent wrongly labelled payload data
+        # Other ESP32 status lines
         # ----------------------------------------------------
-
-        if not validate_packet_configuration(
-            packet
-        ):
-
-            continue
-
-
-        # ----------------------------------------------------
-        # Store packet
-        # ----------------------------------------------------
-
-        window.add(
-            packet
-        )
-
-
-        # ----------------------------------------------------
-        # Human-readable status
-        # ----------------------------------------------------
-
-        status = (
-            "OK"
-            if packet.successful
-            else "LOST"
-        )
-
-
-        rtt_text = (
-            f"{packet.rtt_ms:.2f}ms"
-
-            if packet.rtt_ms
-            is not None
-
-            else "-"
-        )
-
-
-        rssi_text = (
-            f"{packet.rssi_dbm:.1f}dBm"
-
-            if packet.rssi_dbm
-            is not None
-
-            else "N/A"
-        )
-
 
         print(
-            f"[PKT] "
-            f"id={packet.packet_id:<6d} "
-            f"{status:<4s} "
-            f"payload={packet.payload_bytes:<4d}B "
-            f"RSSI={rssi_text:>9s} "
-            f"RTT={rtt_text:>9s}"
+            "[ESP]",
+            line,
         )
 
-
     window.stop()
-
 
     return window
 
@@ -2370,29 +1816,11 @@ def collect_repetition(
 def main(
 ) -> None:
 
-    # --------------------------------------------------------
-    # Validate experiment configuration
-    # --------------------------------------------------------
-
     validate_configuration()
-
-
-    # --------------------------------------------------------
-    # Print experiment settings
-    # --------------------------------------------------------
 
     print_experiment_configuration()
 
-
-    # --------------------------------------------------------
-    # Check API
-    #
-    # Experiment is still allowed to continue if API is down.
-    # Failed measurements will be stored locally.
-    # --------------------------------------------------------
-
     check_api()
-
 
     while True:
 
@@ -2404,74 +1832,37 @@ def main(
                 f"@ {BAUD_RATE}"
             )
 
-
             with serial.Serial(
 
                 SERIAL_PORT,
 
                 BAUD_RATE,
 
-                timeout=
-                    1,
+                timeout=1,
 
             ) as ser:
 
-
-                # ------------------------------------------------
-                # ESP32 may reset when serial port opens
-                # ------------------------------------------------
-
-                time.sleep(
-                    2
-                )
-
+                time.sleep(2)
 
                 print(
                     "[SERIAL] Connected"
                 )
 
-
-                # ------------------------------------------------
-                # Configure BLE sender
-                # ------------------------------------------------
-
                 configure_esp32(
                     ser
                 )
 
-
-                # ------------------------------------------------
-                # Remove remaining CONFIG / debug messages
-                # ------------------------------------------------
-
                 ser.reset_input_buffer()
 
-
-                # ================================================
-                # RUN ALL REPETITIONS
-                # ================================================
-
                 for repetition in range(
-
                     1,
-
                     REPETITIONS + 1,
-
                 ):
 
-                    window = (
-                        collect_repetition(
-
-                            ser,
-
-                            repetition,
-                        )
+                    window = collect_repetition(
+                        ser,
+                        repetition,
                     )
-
-
-                    # --------------------------------------------
-                    # No packets collected
-                    # --------------------------------------------
 
                     if not window.packets:
 
@@ -2480,50 +1871,35 @@ def main(
                             "collected during this repetition."
                         )
 
-
                         continue
 
-
-                    # --------------------------------------------
-                    # Build experiment measurement
-                    # --------------------------------------------
-
-                    measurement = (
-                        build_measurement(
-
-                            window,
-
-                            repetition,
-                        )
-                    )
-
-
-                    # --------------------------------------------
-                    # Display summary
-                    # --------------------------------------------
-
-                    print_measurement_summary(
-
-                        measurement,
-
+                    measurement = build_measurement(
+                        window,
                         repetition,
                     )
 
-
-                    # --------------------------------------------
-                    # Send to API
-                    # --------------------------------------------
-
-                    success = (
-                        send_measurement(
-                            measurement
-                        )
+                    # Local-only helper for printed summary.
+                    # Remove before API submission because this is
+                    # not part of your database schema.
+                    measurement[
+                        "_power_sample_count"
+                    ] = len(
+                        window.power_samples
                     )
 
+                    print_measurement_summary(
+                        measurement,
+                        repetition,
+                    )
 
-                    # --------------------------------------------
-                    # Local backup if API submission fails
-                    # --------------------------------------------
+                    measurement.pop(
+                        "_power_sample_count",
+                        None,
+                    )
+
+                    success = send_measurement(
+                        measurement
+                    )
 
                     if not success:
 
@@ -2531,37 +1907,21 @@ def main(
                             measurement
                         )
 
-
-                    # --------------------------------------------
-                    # Separate independent repetitions
-                    # --------------------------------------------
-
-                    if (
-                        repetition
-                        < REPETITIONS
-                    ):
+                    if repetition < REPETITIONS:
 
                         print(
                             "[TEST] Waiting 3 seconds "
                             "before next repetition..."
                         )
 
-
-                        time.sleep(
-                            3
-                        )
-
+                        time.sleep(3)
 
                 print()
-
-
                 print(
                     "[DONE] Experiment completed."
                 )
 
-
                 return
-
 
         except SerialException as exc:
 
@@ -2570,16 +1930,11 @@ def main(
                 exc,
             )
 
-
             print(
                 "Retrying in 3 seconds..."
             )
 
-
-            time.sleep(
-                3
-            )
-
+            time.sleep(3)
 
         except RuntimeError as exc:
 
@@ -2588,30 +1943,20 @@ def main(
                 exc,
             )
 
-
             print(
                 "Retrying in 3 seconds..."
             )
 
-
-            time.sleep(
-                3
-            )
-
+            time.sleep(3)
 
         except KeyboardInterrupt:
 
             print()
-
-
             print(
                 "Collector stopped by user."
             )
 
-
-            sys.exit(
-                0
-            )
+            sys.exit(0)
 
 
 # ============================================================
@@ -2619,5 +1964,4 @@ def main(
 # ============================================================
 
 if __name__ == "__main__":
-
     main()

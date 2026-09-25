@@ -247,7 +247,12 @@ class PacketTelemetry:
     retries: int
 
     timestamp_ms: int
-    current_ma: float | None
+
+
+@dataclass
+class PowerSample:
+    timestamp_ms: int
+    current_ma: float
 
 # ============================================================
 #                EXPERIMENT-ID GENERATION
@@ -309,19 +314,7 @@ def parse_packet_line(
     """
     Expected ESP32 serial format:
 
-    PKT,
-    packet_id,
-    payload_bytes,
-    rssi_dbm,
-    rtt_ms,
-    successful,
-    retries,
-    timestamp_ms,
-    current_ma
-
-    Example:
-
-    PKT,42,128,-63,6.00,1,0,49381,182.40
+    PKT,packet_id,payload_bytes,rssi_dbm,rtt_ms,successful,retries,timestamp_ms
     """
 
     if not line.startswith("PKT,"):
@@ -329,9 +322,9 @@ def parse_packet_line(
 
     parts = line.split(",")
 
-    if len(parts) != 9:
+    if len(parts) != 8:
         print(
-            f"[WARN] Expected 9 fields, "
+            f"[WARN] Expected 8 PKT fields, "
             f"got {len(parts)}: {line}"
         )
         return None
@@ -344,32 +337,47 @@ def parse_packet_line(
         successful = bool(int(parts[5]))
         retries = int(parts[6])
         timestamp_ms = int(parts[7])
-        current_value = float(parts[8])
 
         return PacketTelemetry(
             packet_id=packet_id,
             payload_bytes=payload_bytes,
             rssi_dbm=rssi_dbm,
-            rtt_ms=(
-                None
-                if rtt_value < 0
-                else rtt_value
-            ),
+            rtt_ms=(None if rtt_value < 0 else rtt_value),
             successful=successful,
             retries=retries,
             timestamp_ms=timestamp_ms,
-            current_ma=(
-                None
-                if current_value < 0
-                else current_value
-            ),
         )
 
     except ValueError as exc:
+        print(f"[WARN] PKT parse error: {exc}: {line}")
+        return None
+
+
+def parse_power_line(
+    line: str,
+) -> PowerSample | None:
+
+    """Expected: PWR,timestamp_ms,current_ma"""
+
+    if not line.startswith("PWR,"):
+        return None
+
+    parts = line.split(",")
+
+    if len(parts) != 3:
         print(
-            f"[WARN] Parse error: "
-            f"{exc}: {line}"
+            f"[WARN] Expected 3 PWR fields, "
+            f"got {len(parts)}: {line}"
         )
+        return None
+
+    try:
+        return PowerSample(
+            timestamp_ms=int(parts[1]),
+            current_ma=float(parts[2]),
+        )
+    except ValueError as exc:
+        print(f"[WARN] PWR parse error: {exc}: {line}")
         return None
 
 # ============================================================
@@ -384,6 +392,10 @@ class MeasurementWindow:
             PacketTelemetry
         ] = []
 
+        self.power_samples: list[
+            PowerSample
+        ] = []
+
         self.started_at: float | None = None
         self.finished_at: float | None = None
 
@@ -391,6 +403,7 @@ class MeasurementWindow:
     def start(self) -> None:
 
         self.packets.clear()
+        self.power_samples.clear()
 
         self.started_at = (
             time.monotonic()
@@ -407,6 +420,13 @@ class MeasurementWindow:
         self.packets.append(
             packet
         )
+
+
+    def add_power(
+        self,
+        sample: PowerSample,
+    ) -> None:
+        self.power_samples.append(sample)
 
 
     def stop(self) -> None:
@@ -776,9 +796,10 @@ def build_measurement(
         in successful_packets
     )
 
-    duration_seconds = (
-        window.elapsed_seconds
-    )
+    # Use the configured test duration for cross-protocol normalization.
+    # The collector loop can overshoot by a few milliseconds while blocked
+    # in serial.readline(); that should not change energy/throughput labels.
+    duration_seconds = float(TEST_DURATION_SECONDS)
 
     throughput_kbps = (
         successful_bytes
@@ -810,27 +831,19 @@ def build_measurement(
     # --------------------------------------------------------
     # Power / energy
     #
-    # Current is measured by the ACS712 on the sender.
+    # Power samples now arrive independently as PWR lines every 20 ms.
+    # This prevents current measurement from being biased by packet RTT.
+    # Energy is normalized to the exact configured experiment duration.
     #
-    # Using a constant load voltage of 3.3 V:
-    #
-    #   Power (mW) = Voltage (V) * Current (mA)
-    #   Energy (mJ) = Power (mW) * Time (s)
-    #
-    # Therefore:
-    #
-    #   Energy_mJ = 3.3 * mean_current_mA * duration_seconds
+    #   E(mJ) = V(V) * I_avg(mA) * t(s)
     # --------------------------------------------------------
 
     current_values = [
-        packet.current_ma
-        for packet in packets
-        if packet.current_ma is not None
+        sample.current_ma
+        for sample in window.power_samples
     ]
 
-    current_mean_ma = mean_or_none(
-        current_values
-    )
+    current_mean_ma = mean_or_none(current_values)
 
     estimated_energy_mj = (
         SUPPLY_VOLTAGE_V
@@ -1018,7 +1031,7 @@ def build_measurement(
         # ----------------------------------------------------
 
         "rtt_ms":
-            None,
+            latency_mean,
 
         "latency_mean_ms":
             latency_mean,
@@ -1050,7 +1063,7 @@ def build_measurement(
         # ----------------------------------------------------
 
         "transfer_time_ms":
-            duration_seconds
+            TEST_DURATION_SECONDS
             * 1000.0,
 
 
@@ -1469,22 +1482,20 @@ def collect_repetition(
         if not line:
             continue
 
-        if not line.startswith(
-            "PKT,"
-        ):
+        if line.startswith("PWR,"):
+            sample = parse_power_line(line)
+            if sample is not None:
+                window.add_power(sample)
+            continue
 
+        if not line.startswith("PKT,"):
             print(
                 "[ESP]",
                 line,
             )
-
             continue
 
-        packet = (
-            parse_packet_line(
-                line
-            )
-        )
+        packet = parse_packet_line(line)
 
         if packet is None:
             continue
@@ -1518,8 +1529,7 @@ def collect_repetition(
             f"{status:<4s} "
             f"payload={packet.payload_bytes:<4d}B "
             f"RSSI={packet.rssi_dbm:6.1f} "
-            f"RTT={rtt_text:>9s} "
-            f"I={packet.current_ma:7.2f}mA"
+            f"RTT={rtt_text:>9s}"
         )
 
     window.stop()

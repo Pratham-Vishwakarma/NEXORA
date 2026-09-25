@@ -1,58 +1,62 @@
+#include <Arduino.h>
 #include <BluetoothSerial.h>
+#include <math.h>
 
 // ============================================================
 // Classic Bluetooth configuration
 // ============================================================
-//
-// IMPORTANT:
-// Classic Bluetooth SPP works on the original ESP32,
-// ESP32-WROOM, ESP32-WROVER, etc.
-//
-// It does NOT work on ESP32-C3 / ESP32-S2 because those
-// chips do not support Bluetooth Classic.
-//
-// Receiver should advertise this Bluetooth name.
-//
-const char* RECEIVER_BT_NAME = "ESP32_BT_RECEIVER";
 
-const char* SENDER_BT_NAME = "ESP32_BT_SENDER";
+const char* RECEIVER_BT_NAME = "ESP32_BT_RECEIVER";
+const char* SENDER_BT_NAME   = "ESP32_BT_SENDER";
 
 
 // ============================================================
-// Network / ACK configuration
+// ACK configuration
 // ============================================================
 
 const uint32_t ACK_TIMEOUT_MS = 1000;
 
 
 // ============================================================
-// Runtime experiment configuration
-//
-// Python sends:
-//
-// CONFIG,<payload_bytes>,<packet_interval_ms>
-//
-// Example:
-//
-// CONFIG,128,500
-//
-// ESP32 responds:
-//
-// CONFIG_OK,128,500,0
-//
-// Last field is kept for compatibility with the existing
-// Wi-Fi CONFIG_OK output.
-//
-// Wi-Fi used this field for channel.
-// Bluetooth sender reports 0 here.
+// Experiment configuration
 // ============================================================
 
 const size_t MAX_PAYLOAD_SIZE = 2048;
 
-// Defaults until Python sends CONFIG
 uint16_t payloadSize = 16;
 
-uint32_t sendIntervalMs = 1000;
+uint32_t sendIntervalMs = 100;
+
+
+// ============================================================
+// ACS712 configuration
+// ============================================================
+
+const int ACS712_PIN = 34;
+
+
+// ACS712 5A sensitivity
+const float ACS712_SENSITIVITY_MV_PER_A = 185.0;
+
+
+// IMPORTANT:
+//
+// Calibrate this using the actual zero-current ADC value.
+// 2500 mV is only the nominal starting value.
+//
+const float ACS712_ZERO_MV = 2500.0;
+
+
+// Dataset/load voltage
+const float LOAD_VOLTAGE_V = 3.3;
+
+
+// Current measurement rate
+const uint32_t CURRENT_SAMPLE_INTERVAL_MS = 5;
+
+
+// Ignore tiny readings caused by ADC/sensor noise
+const float CURRENT_NOISE_FLOOR_MA = 8.0;
 
 
 // ============================================================
@@ -67,16 +71,7 @@ uint8_t payload[MAX_PAYLOAD_SIZE];
 
 
 // ============================================================
-// Packet structures
-// ============================================================
-//
-// SAME logical structure as Wi-Fi sender.
-//
-// Packet transmitted over Bluetooth:
-//
-// [TestHeader]
-// [application payload]
-//
+// Bluetooth packet structures
 // ============================================================
 
 struct __attribute__((packed)) TestHeader {
@@ -100,14 +95,167 @@ struct __attribute__((packed)) AckPacket {
 
 
 // ============================================================
-// Bluetooth connection state
+// Power measurement state
 // ============================================================
 
-bool bluetoothConnected = false;
+double currentSumMa = 0.0;
+
+uint32_t currentSampleCount = 0;
+
+double cycleEnergyMj = 0.0;
+
+uint32_t lastCurrentSampleMs = 0;
 
 
 // ============================================================
-// Prepare application payload
+// Read ACS712
+// ============================================================
+
+float readCurrentMa() {
+
+  uint32_t sensorMv =
+    analogReadMilliVolts(
+      ACS712_PIN
+    );
+
+
+  float differenceMv =
+    static_cast<float>(
+      sensorMv
+    )
+    - ACS712_ZERO_MV;
+
+
+  float currentA =
+    fabs(
+      differenceMv
+    )
+    /
+    ACS712_SENSITIVITY_MV_PER_A;
+
+
+  float currentMa =
+    currentA * 1000.0;
+
+
+  if (
+    currentMa
+    < CURRENT_NOISE_FLOOR_MA
+  ) {
+
+    currentMa = 0.0;
+  }
+
+
+  return currentMa;
+}
+
+
+// ============================================================
+// Reset power window
+// ============================================================
+
+void resetPowerMeasurement() {
+
+  currentSumMa = 0.0;
+
+  currentSampleCount = 0;
+
+  cycleEnergyMj = 0.0;
+
+  lastCurrentSampleMs =
+    millis();
+}
+
+
+// ============================================================
+// Sample current and integrate energy
+// ============================================================
+
+void samplePower(
+    bool forceSample = false
+) {
+
+  uint32_t now =
+    millis();
+
+
+  uint32_t elapsedMs =
+    now
+    - lastCurrentSampleMs;
+
+
+  if (
+    !forceSample
+    &&
+    elapsedMs < CURRENT_SAMPLE_INTERVAL_MS
+  ) {
+
+    return;
+  }
+
+
+  float currentMa =
+    readCurrentMa();
+
+
+  currentSumMa +=
+    currentMa;
+
+
+  currentSampleCount++;
+
+
+  // ----------------------------------------------------------
+  // E(mJ) = V × I(A) × time(ms)
+  // ----------------------------------------------------------
+
+  cycleEnergyMj +=
+
+    LOAD_VOLTAGE_V
+
+    *
+
+    (
+      currentMa
+      / 1000.0
+    )
+
+    *
+
+    elapsedMs;
+
+
+  lastCurrentSampleMs =
+    now;
+}
+
+
+// ============================================================
+// Average current
+// ============================================================
+
+float getAverageCurrentMa() {
+
+  if (
+    currentSampleCount == 0
+  ) {
+
+    return 0.0;
+  }
+
+
+  return static_cast<float>(
+
+    currentSumMa
+
+    / currentSampleCount
+  );
+}
+
+
+// ============================================================
+// Prepare payload
 // ============================================================
 
 void preparePayload(
@@ -137,7 +285,7 @@ void preparePayload(
 
 
 // ============================================================
-// Connect to Bluetooth receiver
+// Connect Bluetooth
 // ============================================================
 
 bool connectBluetooth() {
@@ -145,8 +293,6 @@ bool connectBluetooth() {
   if (
     SerialBT.connected()
   ) {
-
-    bluetoothConnected = true;
 
     return true;
   }
@@ -171,28 +317,13 @@ bool connectBluetooth() {
     connected
   ) {
 
-    bluetoothConnected = true;
-
-
     Serial.println(
       "Bluetooth connected"
     );
 
 
-    Serial.print(
-      "Receiver: "
-    );
-
-    Serial.println(
-      RECEIVER_BT_NAME
-    );
-
-
     return true;
   }
-
-
-  bluetoothConnected = false;
 
 
   Serial.println(
@@ -205,11 +336,7 @@ bool connectBluetooth() {
 
 
 // ============================================================
-// Flush stale Bluetooth data
-//
-// Because Bluetooth SPP is a byte stream, an old ACK
-// remaining in the buffer could otherwise be interpreted as
-// the ACK for a new packet.
+// Flush stale ACK bytes
 // ============================================================
 
 void flushBluetoothInput() {
@@ -224,25 +351,13 @@ void flushBluetoothInput() {
 
 
 // ============================================================
-// Handle configuration from Python
+// Python CONFIG command
 //
-// Expected:
+// CONFIG,<payload>,<interval>
 //
-// CONFIG,128,500
+// Example:
 //
-// Meaning:
-//
-// payload  = 128 bytes
-// interval = 500 ms
-//
-// Response:
-//
-// CONFIG_OK,128,500,0
-//
-// The fourth field is retained so the Python parser can
-// remain compatible with Wi-Fi.
-//
-// For Bluetooth it is always 0.
+// CONFIG,16,100
 // ============================================================
 
 void handleSerialConfig() {
@@ -264,7 +379,6 @@ void handleSerialConfig() {
   command.trim();
 
 
-  // Only process CONFIG commands
   if (
     !command.startsWith(
       "CONFIG,"
@@ -274,10 +388,6 @@ void handleSerialConfig() {
     return;
   }
 
-
-  // ----------------------------------------------------------
-  // Find separators
-  // ----------------------------------------------------------
 
   int firstComma =
     command.indexOf(',');
@@ -291,7 +401,8 @@ void handleSerialConfig() {
 
 
   if (
-    firstComma == -1 ||
+    firstComma == -1
+    ||
     secondComma == -1
   ) {
 
@@ -302,10 +413,6 @@ void handleSerialConfig() {
     return;
   }
 
-
-  // ----------------------------------------------------------
-  // Extract values
-  // ----------------------------------------------------------
 
   String payloadString =
     command.substring(
@@ -328,12 +435,9 @@ void handleSerialConfig() {
     intervalString.toInt();
 
 
-  // ----------------------------------------------------------
-  // Validate payload
-  // ----------------------------------------------------------
-
   if (
-    newPayload <= 0 ||
+    newPayload <= 0
+    ||
     newPayload > MAX_PAYLOAD_SIZE
   ) {
 
@@ -348,10 +452,6 @@ void handleSerialConfig() {
     return;
   }
 
-
-  // ----------------------------------------------------------
-  // Validate interval
-  // ----------------------------------------------------------
 
   if (
     newInterval <= 0
@@ -369,10 +469,6 @@ void handleSerialConfig() {
   }
 
 
-  // ----------------------------------------------------------
-  // Apply configuration
-  // ----------------------------------------------------------
-
   payloadSize =
     static_cast<uint16_t>(
       newPayload
@@ -389,23 +485,6 @@ void handleSerialConfig() {
     payloadSize
   );
 
-
-  // ----------------------------------------------------------
-  // Confirm configuration
-  //
-  // SAME number of fields as Wi-Fi sender:
-  //
-  // CONFIG_OK,
-  // payload,
-  // interval,
-  // protocol_specific_value
-  //
-  // For Wi-Fi:
-  // protocol_specific_value = Wi-Fi channel
-  //
-  // For Bluetooth:
-  // protocol_specific_value = 0
-  // ----------------------------------------------------------
 
   Serial.print(
     "CONFIG_OK,"
@@ -430,9 +509,93 @@ void handleSerialConfig() {
 
 
 // ============================================================
-// Print packet telemetry
+// Read exact Bluetooth bytes
+// ============================================================
+
+bool readBluetoothBytes(
+
+    uint8_t* buffer,
+
+    size_t length,
+
+    uint32_t timeoutMs
+
+) {
+
+  size_t received = 0;
+
+
+  uint32_t startTime =
+    millis();
+
+
+  while (
+
+    received < length
+
+    &&
+
+    millis() - startTime
+      < timeoutMs
+
+  ) {
+
+    handleSerialConfig();
+
+
+    samplePower();
+
+
+    while (
+
+      SerialBT.available()
+
+      &&
+
+      received < length
+
+    ) {
+
+      int value =
+        SerialBT.read();
+
+
+      if (
+        value >= 0
+      ) {
+
+        buffer[received] =
+          static_cast<uint8_t>(
+            value
+          );
+
+
+        received++;
+      }
+    }
+
+
+    if (
+      received < length
+    ) {
+
+      delay(
+        1
+      );
+    }
+  }
+
+
+  return (
+    received == length
+  );
+}
+
+
+// ============================================================
+// Packet telemetry
 //
-// SAME FORMAT as Wi-Fi sender:
+// NEW FORMAT:
 //
 // PKT,
 // packet_id,
@@ -441,30 +604,35 @@ void handleSerialConfig() {
 // RTT,
 // success,
 // retries,
-// timestamp
+// timestamp_ms,
+// current_ma,
+// energy_mj
 //
 // Example:
 //
-// PKT,42,128,-127,8.00,1,0,49381
-//
-// NOTE:
-// Arduino BluetoothSerial does not expose a clean,
-// portable RSSI value for an active SPP connection.
-//
-// Therefore RSSI = -127 is used as "unavailable".
-//
-// Your Python collector should interpret -127 as missing
-// Bluetooth RSSI rather than a real measurement.
+// PKT,42,16,-127,38.00,1,0,49381,80.931,26.707000
 // ============================================================
 
 void printPacketTelemetry(
+
     uint32_t packetId,
+
     uint16_t payloadBytes,
+
     int rssi,
+
     float rttMs,
+
     bool successful,
+
     uint16_t retries,
-    uint32_t timestampMs
+
+    uint32_t timestampMs,
+
+    float currentMa,
+
+    double energyMj
+
 ) {
 
   Serial.print(
@@ -515,77 +683,24 @@ void printPacketTelemetry(
   Serial.print(",");
 
 
-  Serial.println(
+  Serial.print(
     timestampMs
   );
-}
+
+  Serial.print(",");
 
 
-// ============================================================
-// Read an exact number of Bluetooth bytes
-//
-// Returns true if all requested bytes arrive before timeout.
-// ============================================================
+  Serial.print(
+    currentMa,
+    3
+  );
 
-bool readBluetoothBytes(
-    uint8_t* buffer,
-    size_t length,
-    uint32_t timeoutMs
-) {
-
-  size_t received = 0;
+  Serial.print(",");
 
 
-  uint32_t startTime =
-    millis();
-
-
-  while (
-    received < length &&
-    millis() - startTime < timeoutMs
-  ) {
-
-    // Keep accepting Python CONFIG messages while waiting
-    handleSerialConfig();
-
-
-    while (
-      SerialBT.available() &&
-      received < length
-    ) {
-
-      int value =
-        SerialBT.read();
-
-
-      if (
-        value >= 0
-      ) {
-
-        buffer[received] =
-          static_cast<uint8_t>(
-            value
-          );
-
-
-        received++;
-      }
-    }
-
-
-    if (
-      received < length
-    ) {
-
-      delay(
-        1
-      );
-    }
-  }
-
-
-  return (
-    received == length
+  Serial.println(
+    energyMj,
+    6
   );
 }
 
@@ -627,7 +742,81 @@ void setup() {
 
 
   // ----------------------------------------------------------
-  // Prepare default payload
+  // ACS712 ADC
+  // ----------------------------------------------------------
+
+  pinMode(
+    ACS712_PIN,
+    INPUT
+  );
+
+
+  analogReadResolution(
+    12
+  );
+
+
+  analogSetPinAttenuation(
+    ACS712_PIN,
+    ADC_11db
+  );
+
+
+  Serial.println(
+    "ACS712 monitoring enabled"
+  );
+
+
+  Serial.print(
+    "ADC pin: GPIO"
+  );
+
+  Serial.println(
+    ACS712_PIN
+  );
+
+
+  Serial.print(
+    "ACS712 sensitivity: "
+  );
+
+  Serial.print(
+    ACS712_SENSITIVITY_MV_PER_A
+  );
+
+  Serial.println(
+    " mV/A"
+  );
+
+
+  Serial.print(
+    "ACS712 zero point: "
+  );
+
+  Serial.print(
+    ACS712_ZERO_MV
+  );
+
+  Serial.println(
+    " mV"
+  );
+
+
+  Serial.print(
+    "Dataset voltage: "
+  );
+
+  Serial.print(
+    LOAD_VOLTAGE_V
+  );
+
+  Serial.println(
+    " V"
+  );
+
+
+  // ----------------------------------------------------------
+  // Default payload
   // ----------------------------------------------------------
 
   preparePayload(
@@ -636,11 +825,7 @@ void setup() {
 
 
   // ----------------------------------------------------------
-  // Start Bluetooth in MASTER mode
-  //
-  // begin(name, true)
-  //
-  // true = master mode
+  // Bluetooth master
   // ----------------------------------------------------------
 
   bool btStarted =
@@ -685,7 +870,7 @@ void setup() {
 
 
   Serial.print(
-    "Expected receiver name: "
+    "Expected receiver: "
   );
 
   Serial.println(
@@ -693,16 +878,8 @@ void setup() {
   );
 
 
-  // ----------------------------------------------------------
-  // Attempt initial connection
-  // ----------------------------------------------------------
-
   connectBluetooth();
 
-
-  // ----------------------------------------------------------
-  // Print experiment defaults
-  // ----------------------------------------------------------
 
   Serial.print(
     "Default payload size: "
@@ -726,20 +903,7 @@ void setup() {
   );
 
   Serial.println(
-    " ms"
-  );
-
-
-  Serial.print(
-    "Maximum payload size: "
-  );
-
-  Serial.print(
-    MAX_PAYLOAD_SIZE
-  );
-
-  Serial.println(
-    " bytes"
+    " ms start-to-start"
   );
 
 
@@ -760,35 +924,24 @@ void setup() {
 
 void loop() {
 
-  // ----------------------------------------------------------
-  // Handle configuration from Python
-  // ----------------------------------------------------------
-
   handleSerialConfig();
 
 
   // ----------------------------------------------------------
-  // Restore Bluetooth connection if disconnected
+  // Ensure Bluetooth connection
   // ----------------------------------------------------------
 
   if (
     !SerialBT.connected()
   ) {
 
-    bluetoothConnected = false;
-
-
     Serial.println(
       "Bluetooth disconnected. Reconnecting..."
     );
 
 
-    connectBluetooth();
-
-
-    // Avoid hammering connection attempts
     if (
-      !SerialBT.connected()
+      !connectBluetooth()
     ) {
 
       delay(
@@ -800,18 +953,47 @@ void loop() {
   }
 
 
-  bluetoothConnected = true;
+  // ==========================================================
+  // FIXED-CADENCE PACKET WINDOW
+  //
+  // IMPORTANT:
+  //
+  // packetIntervalMs is measured from the START of this
+  // transmission to the START of the next transmission.
+  //
+  // OLD:
+  //
+  // TX -> ACK -> wait 100 ms -> next TX
+  //
+  // NEW:
+  //
+  // TX -------------------------- next TX
+  // |<--------- 100 ms --------->|
+  //
+  // ACK time is INSIDE this 100 ms period.
+  // ==========================================================
+
+  uint32_t cycleStartMs =
+    millis();
 
 
-  // ----------------------------------------------------------
-  // New packet
-  // ----------------------------------------------------------
+  uint32_t cycleIntervalMs =
+    sendIntervalMs;
+
 
   packetId++;
 
 
+  resetPowerMeasurement();
+
+
+  samplePower(
+    true
+  );
+
+
   // ----------------------------------------------------------
-  // Construct packet header
+  // Build packet
   // ----------------------------------------------------------
 
   TestHeader header;
@@ -822,51 +1004,42 @@ void loop() {
 
 
   header.timestamp_ms =
-    millis();
+    cycleStartMs;
 
 
   header.payload_size =
     payloadSize;
 
 
-  // ----------------------------------------------------------
-  // Remove any stale ACK / Bluetooth bytes
-  // ----------------------------------------------------------
-
   flushBluetoothInput();
 
 
-  // ----------------------------------------------------------
-  // RTT timer
-  // ----------------------------------------------------------
-
-  uint32_t sendStart =
+  uint32_t sendStartMs =
     millis();
 
 
   // ----------------------------------------------------------
-  // Send packet
-  //
-  // Bluetooth stream:
-  //
-  // [TestHeader]
-  // [application payload]
-  //
-  // TestHeader = 10 bytes
+  // Transmit header
   // ----------------------------------------------------------
 
   size_t headerWritten =
     SerialBT.write(
+
       reinterpret_cast<
         const uint8_t*
       >(
         &header
       ),
+
       sizeof(
         TestHeader
       )
     );
 
+
+  // ----------------------------------------------------------
+  // Transmit payload
+  // ----------------------------------------------------------
 
   size_t payloadWritten =
     SerialBT.write(
@@ -875,22 +1048,28 @@ void loop() {
     );
 
 
-  bool sendOk =
-    (
-      headerWritten
-        == sizeof(TestHeader)
-      &&
-      payloadWritten
-        == payloadSize
-    );
+  bool sendOk = (
+
+    headerWritten
+      == sizeof(
+        TestHeader
+      )
+
+    &&
+
+    payloadWritten
+      == payloadSize
+  );
 
 
-  // Ensure queued Bluetooth data is transmitted
   SerialBT.flush();
 
 
+  samplePower();
+
+
   // ----------------------------------------------------------
-  // Wait for receiver ACK
+  // Wait for ACK
   // ----------------------------------------------------------
 
   bool ackReceived =
@@ -909,27 +1088,35 @@ void loop() {
     sendOk
   ) {
 
-    uint32_t timeoutStart =
+    uint32_t timeoutStartMs =
       millis();
 
 
     while (
-      millis() - timeoutStart
+
+      millis()
+        - timeoutStartMs
+
       < ACK_TIMEOUT_MS
+
     ) {
 
-      // Python can still change experiment parameters
       handleSerialConfig();
 
 
-      // Wait until enough bytes for an ACK are available
+      samplePower();
+
+
       if (
+
         SerialBT.available()
+
         >= static_cast<int>(
           sizeof(
             AckPacket
           )
         )
+
       ) {
 
         AckPacket ack;
@@ -937,26 +1124,35 @@ void loop() {
 
         bool ackRead =
           readBluetoothBytes(
+
             reinterpret_cast<
               uint8_t*
             >(
               &ack
             ),
+
             sizeof(
               AckPacket
             ),
+
             ACK_TIMEOUT_MS
           );
 
 
         if (
+
           ackRead
+
           &&
+
           ack.packet_id
             == packetId
+
           &&
+
           ack.success
             == 1
+
         ) {
 
           ackReceived =
@@ -965,8 +1161,9 @@ void loop() {
 
           rttMs =
             static_cast<float>(
+
               millis()
-              - sendStart
+              - sendStartMs
             );
 
 
@@ -983,31 +1180,61 @@ void loop() {
 
 
   // ----------------------------------------------------------
-  // Bluetooth RSSI
-  //
-  // BluetoothSerial does not provide a portable active-link
-  // RSSI API like WiFi.RSSI().
-  //
-  // -127 therefore means "RSSI unavailable".
+  // Classic Bluetooth RSSI unavailable
   // ----------------------------------------------------------
 
   int rssi =
     -127;
 
 
+  // ==========================================================
+  // WAIT ONLY FOR REMAINING INTERVAL
+  //
+  // This is the critical timing correction.
+  // ==========================================================
+
+  while (
+
+    millis() - cycleStartMs
+      < cycleIntervalMs
+
+  ) {
+
+    handleSerialConfig();
+
+
+    samplePower();
+
+
+    if (
+      !SerialBT.connected()
+    ) {
+
+      break;
+    }
+
+
+    delay(
+      1
+    );
+  }
+
+
   // ----------------------------------------------------------
-  // Output telemetry to Python
-  //
-  // Exactly the same column order as Wi-Fi:
-  //
-  // PKT,
-  // ID,
-  // payload,
-  // RSSI,
-  // RTT,
-  // success,
-  // retries,
-  // timestamp
+  // Final current/energy sample
+  // ----------------------------------------------------------
+
+  samplePower(
+    true
+  );
+
+
+  float averageCurrentMa =
+    getAverageCurrentMa();
+
+
+  // ----------------------------------------------------------
+  // Output complete cycle telemetry
   // ----------------------------------------------------------
 
   printPacketTelemetry(
@@ -1026,40 +1253,10 @@ void loop() {
 
     retryCount,
 
-    millis()
+    cycleStartMs,
+
+    averageCurrentMa,
+
+    cycleEnergyMj
   );
-
-
-  // ----------------------------------------------------------
-  // Wait for next transmission
-  //
-  // Do not use one large delay because Python can issue
-  // CONFIG commands at any time.
-  // ----------------------------------------------------------
-
-  uint32_t waitStart =
-    millis();
-
-
-  while (
-    millis() - waitStart
-    < sendIntervalMs
-  ) {
-
-    handleSerialConfig();
-
-
-    // Break early if Bluetooth disconnects
-    if (
-      !SerialBT.connected()
-    ) {
-
-      break;
-    }
-
-
-    delay(
-      5
-    );
-  }
 }
