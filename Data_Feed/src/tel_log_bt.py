@@ -19,79 +19,23 @@ from serial import SerialException
 #                EXPERIMENT VARIABLES
 # ============================================================
 
-
-# ------------------------------------------------------------
-# 1. DISTANCE
-# ------------------------------------------------------------
-
 DISTANCE_M = 0.0
-
-
-# ------------------------------------------------------------
-# 2. PAYLOAD SIZE
-#
-# Python sends this value to the ESP32 using:
-#
-# CONFIG,<payload_bytes>,<packet_interval_ms>
-# ------------------------------------------------------------
 
 PAYLOAD_BYTES = 16
 
-
-# ------------------------------------------------------------
-# 3. PACKET INTERVAL
-# ------------------------------------------------------------
-
 PACKET_INTERVAL_MS = 100
-
-
-# ------------------------------------------------------------
-# 4. ENVIRONMENT
-# ------------------------------------------------------------
 
 ENVIRONMENT = "INDOOR"
 
-
-# ------------------------------------------------------------
-# 5. VISIBILITY
-# ------------------------------------------------------------
-
 LINE_OF_SIGHT = True
-
-
-# ------------------------------------------------------------
-# 6. OBSTACLE
-# ------------------------------------------------------------
 
 OBSTACLE_TYPE = None
 
-
-# ------------------------------------------------------------
-# 7. TRAFFIC REQUIREMENT
-# ------------------------------------------------------------
-
 TRAFFIC_REQUIREMENT = "TELEMETRY"
-
-
-# ------------------------------------------------------------
-# 8. TEST DURATION
-# ------------------------------------------------------------
 
 TEST_DURATION_SECONDS = 20
 
-
-# ------------------------------------------------------------
-# 9. REPETITIONS
-# ------------------------------------------------------------
-
 REPETITIONS = 1
-
-
-# ------------------------------------------------------------
-# Maximum supported application payload
-#
-# Must match sender firmware.
-# ------------------------------------------------------------
 
 MAX_PAYLOAD_BYTES = 2048
 
@@ -136,55 +80,24 @@ TX_POWER_DBM = None
 #                  POWER MEASUREMENTS
 # ============================================================
 
-BATTERY_VOLTAGE = None
-
-CURRENT_MA = None
+BATTERY_VOLTAGE = 3.3
 
 
 # ============================================================
 #                PROTOCOL-SPECIFIC VALUES
 # ============================================================
 
-
-# ------------------------------------------------------------
-# Wi-Fi
-# ------------------------------------------------------------
-
 WIFI_CHANNEL = None
-
-
-# ------------------------------------------------------------
-# BLE
-# ------------------------------------------------------------
 
 BLE_PHY = None
 
-
-# ------------------------------------------------------------
-# Bluetooth Classic
-#
-# ESP32 BluetoothSerial uses Classic Bluetooth SPP:
-#
-# Serial Port Profile
-# ------------------------------------------------------------
-
 BT_MODE = "SPP"
-
-
-# ------------------------------------------------------------
-# LoRa
-# ------------------------------------------------------------
 
 LORA_SF = None
 
 LORA_BW = None
 
 LORA_CR = None
-
-
-# ------------------------------------------------------------
-# Cellular
-# ------------------------------------------------------------
 
 CELLULAR_GENERATION = None
 
@@ -208,11 +121,9 @@ API_BASE_URL = (
     "http://100.72.37.28:8000"
 )
 
-
 MEASUREMENT_ENDPOINT = (
     f"{API_BASE_URL}/measurements"
 )
-
 
 HTTP_TIMEOUT_SECONDS = 5
 
@@ -222,286 +133,9 @@ HTTP_TIMEOUT_SECONDS = 5
 # ============================================================
 
 FAILED_FILE = Path(
-    "E:/Projects/Project_Nexora/Data_Feed/errors/failed_measurements.jsonl"
+    "E:/Projects/Project_Nexora/Data_Feed/errors/"
+    "failed_measurements.jsonl"
 )
-
-
-# ============================================================
-#                  ESP32 CONFIGURATION
-# ============================================================
-
-def configure_esp32(
-    ser: serial.Serial,
-) -> None:
-
-    global WIFI_CHANNEL
-
-
-    # --------------------------------------------------------
-    # Build CONFIG command
-    #
-    # Example:
-    #
-    # CONFIG,128,500
-    # --------------------------------------------------------
-
-    command = (
-        f"CONFIG,"
-        f"{PAYLOAD_BYTES},"
-        f"{PACKET_INTERVAL_MS}\n"
-    )
-
-
-    # --------------------------------------------------------
-    # Remove stale startup messages
-    # --------------------------------------------------------
-
-    ser.reset_input_buffer()
-
-
-    # --------------------------------------------------------
-    # Send configuration
-    # --------------------------------------------------------
-
-    ser.write(
-        command.encode(
-            "utf-8"
-        )
-    )
-
-
-    ser.flush()
-
-
-    print(
-        f"[CONFIG] Sent -> "
-        f"payload={PAYLOAD_BYTES} bytes, "
-        f"interval={PACKET_INTERVAL_MS} ms"
-    )
-
-
-    # --------------------------------------------------------
-    # Wait maximum 5 seconds for CONFIG_OK
-    # --------------------------------------------------------
-
-    timeout_at = (
-        time.monotonic()
-        + 5
-    )
-
-
-    while (
-        time.monotonic()
-        < timeout_at
-    ):
-
-        raw = (
-            ser.readline()
-        )
-
-
-        if not raw:
-
-            continue
-
-
-        line = (
-            raw.decode(
-                "utf-8",
-                errors="replace",
-            )
-            .strip()
-        )
-
-
-        if not line:
-
-            continue
-
-
-        print(
-            "[ESP]",
-            line
-        )
-
-
-        # ----------------------------------------------------
-        # Configuration confirmed
-        #
-        # Bluetooth sender outputs:
-        #
-        # CONFIG_OK,
-        # payload,
-        # interval,
-        # 0
-        #
-        # The final zero is NOT Wi-Fi channel 0.
-        # It is only retained for parser compatibility.
-        # ----------------------------------------------------
-
-        if line.startswith(
-            "CONFIG_OK,"
-        ):
-
-            parts = (
-                line.split(",")
-            )
-
-
-            if (
-                len(parts) != 4
-            ):
-
-                print(
-                    "[WARN] Invalid CONFIG_OK format:"
-                )
-
-                print(
-                    line
-                )
-
-                continue
-
-
-            try:
-
-                confirmed_payload = int(
-                    parts[1]
-                )
-
-
-                confirmed_interval = int(
-                    parts[2]
-                )
-
-
-                protocol_specific_value = int(
-                    parts[3]
-                )
-
-
-            except ValueError:
-
-                print(
-                    "[WARN] Invalid CONFIG_OK values:"
-                )
-
-                print(
-                    line
-                )
-
-                continue
-
-
-            # ------------------------------------------------
-            # Verify payload
-            # ------------------------------------------------
-
-            if (
-                confirmed_payload
-                != PAYLOAD_BYTES
-            ):
-
-                raise RuntimeError(
-                    "ESP32 payload confirmation mismatch: "
-                    f"Python={PAYLOAD_BYTES}, "
-                    f"ESP32={confirmed_payload}"
-                )
-
-
-            # ------------------------------------------------
-            # Verify interval
-            # ------------------------------------------------
-
-            if (
-                confirmed_interval
-                != PACKET_INTERVAL_MS
-            ):
-
-                raise RuntimeError(
-                    "ESP32 interval confirmation mismatch: "
-                    f"Python={PACKET_INTERVAL_MS}, "
-                    f"ESP32={confirmed_interval}"
-                )
-
-
-            # ------------------------------------------------
-            # Protocol-specific fourth CONFIG field
-            # ------------------------------------------------
-
-            if (
-                PROTOCOL == "WIFI"
-            ):
-
-                WIFI_CHANNEL = (
-                    protocol_specific_value
-                )
-
-
-                print(
-                    f"[CONFIG] Wi-Fi channel: "
-                    f"{WIFI_CHANNEL}"
-                )
-
-
-            elif (
-                PROTOCOL == "BLUETOOTH"
-            ):
-
-                # Bluetooth sender sends 0 only to preserve
-                # the same CONFIG_OK field count as Wi-Fi.
-
-                WIFI_CHANNEL = None
-
-
-                print(
-                    "[CONFIG] Protocol: "
-                    "Bluetooth Classic"
-                )
-
-
-                print(
-                    "[CONFIG] Bluetooth mode: "
-                    f"{BT_MODE}"
-                )
-
-
-                print(
-                    "[CONFIG] Wi-Fi channel: N/A"
-                )
-
-
-            else:
-
-                WIFI_CHANNEL = None
-
-
-            print(
-                "[CONFIG] ESP32 configuration confirmed"
-            )
-
-
-            return
-
-
-        # ----------------------------------------------------
-        # ESP32 rejected configuration
-        # ----------------------------------------------------
-
-        if line.startswith(
-            "CONFIG_ERROR"
-        ):
-
-            raise RuntimeError(
-                "ESP32 rejected configuration: "
-                f"{line}"
-            )
-
-
-    raise RuntimeError(
-        "ESP32 did not confirm configuration "
-        "within 5 seconds"
-    )
 
 
 # ============================================================
@@ -525,6 +159,10 @@ class PacketTelemetry:
 
     timestamp_ms: int
 
+    current_ma: float | None
+
+    energy_mj: float | None
+
 
 # ============================================================
 #                EXPERIMENT-ID GENERATION
@@ -540,11 +178,11 @@ def normalise_name(
         .lower()
         .replace(
             " ",
-            "_"
+            "_",
         )
         .replace(
             "-",
-            "_"
+            "_",
         )
     )
 
@@ -575,7 +213,7 @@ def build_experiment_id(
         )
         .replace(
             ".",
-            "p"
+            "p",
         )
     )
 
@@ -595,6 +233,177 @@ def build_experiment_id(
 
 
 # ============================================================
+#                  ESP32 CONFIGURATION
+# ============================================================
+
+def configure_esp32(
+    ser: serial.Serial,
+) -> None:
+
+    command = (
+        f"CONFIG,"
+        f"{PAYLOAD_BYTES},"
+        f"{PACKET_INTERVAL_MS}\n"
+    )
+
+
+    ser.reset_input_buffer()
+
+
+    ser.write(
+        command.encode(
+            "utf-8"
+        )
+    )
+
+
+    ser.flush()
+
+
+    print(
+        f"[CONFIG] Sent -> "
+        f"payload={PAYLOAD_BYTES} bytes, "
+        f"interval={PACKET_INTERVAL_MS} ms"
+    )
+
+
+    timeout_at = (
+        time.monotonic()
+        + 5
+    )
+
+
+    while (
+        time.monotonic()
+        < timeout_at
+    ):
+
+        raw = ser.readline()
+
+
+        if not raw:
+
+            continue
+
+
+        line = (
+            raw.decode(
+                "utf-8",
+                errors="replace",
+            )
+            .strip()
+        )
+
+
+        if not line:
+
+            continue
+
+
+        print(
+            "[ESP]",
+            line,
+        )
+
+
+        if line.startswith(
+            "CONFIG_OK,"
+        ):
+
+            parts = (
+                line.split(",")
+            )
+
+
+            if (
+                len(parts) != 4
+            ):
+
+                print(
+                    "[WARN] Invalid CONFIG_OK:"
+                )
+
+                continue
+
+
+            try:
+
+                confirmed_payload = int(
+                    parts[1]
+                )
+
+                confirmed_interval = int(
+                    parts[2]
+                )
+
+            except ValueError:
+
+                continue
+
+
+            if (
+                confirmed_payload
+                != PAYLOAD_BYTES
+            ):
+
+                raise RuntimeError(
+                    "ESP32 payload confirmation mismatch"
+                )
+
+
+            if (
+                confirmed_interval
+                != PACKET_INTERVAL_MS
+            ):
+
+                raise RuntimeError(
+                    "ESP32 interval confirmation mismatch"
+                )
+
+
+            print(
+                "[CONFIG] Protocol: "
+                "Bluetooth Classic"
+            )
+
+
+            print(
+                f"[CONFIG] Bluetooth mode: "
+                f"{BT_MODE}"
+            )
+
+
+            print(
+                "[CONFIG] Packet interval is "
+                "start-to-start"
+            )
+
+
+            print(
+                "[CONFIG] ESP32 configuration confirmed"
+            )
+
+
+            return
+
+
+        if line.startswith(
+            "CONFIG_ERROR"
+        ):
+
+            raise RuntimeError(
+                "ESP32 rejected configuration: "
+                f"{line}"
+            )
+
+
+    raise RuntimeError(
+        "ESP32 did not confirm configuration "
+        "within 5 seconds"
+    )
+
+
+# ============================================================
 #                    SERIAL PARSER
 # ============================================================
 
@@ -603,25 +412,19 @@ def parse_packet_line(
 ) -> PacketTelemetry | None:
 
     """
-    Expected sender format:
+    Expected:
 
     PKT,
     packet_id,
     payload_bytes,
-    rssi_dbm,
+    rssi,
     rtt_ms,
-    successful,
+    success,
     retries,
-    timestamp_ms
-
-    Bluetooth example:
-
-    PKT,42,128,-127,8.00,1,0,49381
-
-    Bluetooth sender uses RSSI = -127 to mean
-    "RSSI unavailable".
+    timestamp_ms,
+    current_ma,
+    energy_mj
     """
-
 
     if not line.startswith(
         "PKT,"
@@ -636,15 +439,14 @@ def parse_packet_line(
 
 
     if (
-        len(parts) != 8
+        len(parts) != 10
     ):
 
         print(
-            f"[WARN] Expected 8 fields, "
+            f"[WARN] Expected 10 fields, "
             f"got {len(parts)}: "
             f"{line}"
         )
-
 
         return None
 
@@ -661,51 +463,35 @@ def parse_packet_line(
         )
 
 
-        # ----------------------------------------------------
-        # RSSI
-        #
-        # Bluetooth firmware uses -127 as a sentinel value,
-        # NOT as an actual RSSI measurement.
-        # ----------------------------------------------------
-
         raw_rssi = float(
             parts[3]
         )
 
 
-        if (
-            PROTOCOL == "BLUETOOTH"
-            and raw_rssi <= -127
-        ):
+        rssi_dbm = (
 
-            rssi_dbm = None
+            None
 
-        else:
+            if raw_rssi <= -127
 
-            rssi_dbm = raw_rssi
+            else raw_rssi
+        )
 
 
-        # ----------------------------------------------------
-        # RTT
-        #
-        # Negative RTT means ACK was not received.
-        # ----------------------------------------------------
-
-        rtt_value = float(
+        raw_rtt = float(
             parts[4]
         )
 
 
         rtt_ms = (
+
             None
-            if rtt_value < 0
-            else rtt_value
+
+            if raw_rtt < 0
+
+            else raw_rtt
         )
 
-
-        # ----------------------------------------------------
-        # Packet success
-        # ----------------------------------------------------
 
         successful = bool(
             int(
@@ -714,21 +500,43 @@ def parse_packet_line(
         )
 
 
-        # ----------------------------------------------------
-        # Retries
-        # ----------------------------------------------------
-
         retries = int(
             parts[6]
         )
 
 
-        # ----------------------------------------------------
-        # ESP32 timestamp
-        # ----------------------------------------------------
-
         timestamp_ms = int(
             parts[7]
+        )
+
+
+        raw_current = float(
+            parts[8]
+        )
+
+
+        current_ma = (
+
+            None
+
+            if raw_current < 0
+
+            else raw_current
+        )
+
+
+        raw_energy = float(
+            parts[9]
+        )
+
+
+        energy_mj = (
+
+            None
+
+            if raw_energy < 0
+
+            else raw_energy
         )
 
 
@@ -754,6 +562,12 @@ def parse_packet_line(
 
             timestamp_ms=
                 timestamp_ms,
+
+            current_ma=
+                current_ma,
+
+            energy_mj=
+                energy_mj,
         )
 
 
@@ -761,8 +575,7 @@ def parse_packet_line(
 
         print(
             f"[WARN] Parse error: "
-            f"{exc}: "
-            f"{line}"
+            f"{exc}: {line}"
         )
 
 
@@ -800,11 +613,9 @@ class MeasurementWindow:
 
         self.packets.clear()
 
-
         self.started_at = (
             time.monotonic()
         )
-
 
         self.finished_at = None
 
@@ -842,9 +653,12 @@ class MeasurementWindow:
 
 
         end_time = (
+
             self.finished_at
+
             if self.finished_at
             is not None
+
             else time.monotonic()
         )
 
@@ -921,23 +735,15 @@ def validate_configuration(
         )
 
 
-    if (
-        PAYLOAD_BYTES <= 0
+    if not (
+        1
+        <= PAYLOAD_BYTES
+        <= MAX_PAYLOAD_BYTES
     ):
 
         raise ValueError(
-            "PAYLOAD_BYTES must be > 0"
-        )
-
-
-    if (
-        PAYLOAD_BYTES
-        > MAX_PAYLOAD_BYTES
-    ):
-
-        raise ValueError(
-            f"PAYLOAD_BYTES must be <= "
-            f"{MAX_PAYLOAD_BYTES}"
+            f"PAYLOAD_BYTES must be between "
+            f"1 and {MAX_PAYLOAD_BYTES}"
         )
 
 
@@ -977,8 +783,7 @@ def validate_configuration(
     ):
 
         raise ValueError(
-            "ENVIRONMENT must be "
-            "'INDOOR' or 'OPEN'"
+            "Invalid ENVIRONMENT"
         )
 
 
@@ -992,8 +797,7 @@ def validate_configuration(
     ):
 
         raise ValueError(
-            "OBSTACLE_TYPE must be "
-            "None, 'WALL', or 'PEOPLE'"
+            "Invalid OBSTACLE_TYPE"
         )
 
 
@@ -1007,20 +811,7 @@ def validate_configuration(
     ):
 
         raise ValueError(
-            "TRAFFIC_REQUIREMENT must be "
-            "'TELEMETRY', 'INTERACTIVE', "
-            "or 'BULK'"
-        )
-
-
-    if (
-        PROTOCOL == "BLUETOOTH"
-        and not BT_MODE
-    ):
-
-        raise ValueError(
-            "BT_MODE cannot be null "
-            "for Bluetooth experiments"
+            "Invalid TRAFFIC_REQUIREMENT"
         )
 
 
@@ -1031,46 +822,6 @@ def validate_configuration(
 def validate_packet_configuration(
     packet: PacketTelemetry,
 ) -> bool:
-
-    # --------------------------------------------------------
-    # Validate Python payload range
-    # --------------------------------------------------------
-
-    if not (
-        1
-        <= PAYLOAD_BYTES
-        <= MAX_PAYLOAD_BYTES
-    ):
-
-        print()
-
-
-        print(
-            "[INVALID PYTHON CONFIGURATION]"
-        )
-
-
-        print(
-            f"PAYLOAD_BYTES must be between "
-            f"1 and {MAX_PAYLOAD_BYTES}"
-        )
-
-
-        print(
-            f"Current PAYLOAD_BYTES : "
-            f"{PAYLOAD_BYTES}"
-        )
-
-
-        print()
-
-
-        return False
-
-
-    # --------------------------------------------------------
-    # Verify sender payload
-    # --------------------------------------------------------
 
     if (
         packet.payload_bytes
@@ -1094,12 +845,6 @@ def validate_packet_configuration(
         print(
             f"ESP32 payload        : "
             f"{packet.payload_bytes}"
-        )
-
-
-        print(
-            "The packet will NOT be "
-            "added to the experiment."
         )
 
 
@@ -1133,10 +878,6 @@ def build_measurement(
         )
 
 
-    # --------------------------------------------------------
-    # Validate payload consistency
-    # --------------------------------------------------------
-
     actual_payload_sizes = {
 
         packet.payload_bytes
@@ -1147,16 +888,12 @@ def build_measurement(
 
 
     if (
-        len(
-            actual_payload_sizes
-        )
+        len(actual_payload_sizes)
         != 1
     ):
 
         raise ValueError(
-            "Mixed payload sizes detected "
-            "inside the same experiment: "
-            f"{actual_payload_sizes}"
+            "Mixed payload sizes detected"
         )
 
 
@@ -1168,23 +905,6 @@ def build_measurement(
         )
     )
 
-
-    if (
-        actual_payload_bytes
-        != PAYLOAD_BYTES
-    ):
-
-        raise ValueError(
-            f"Python configured "
-            f"{PAYLOAD_BYTES} B, "
-            f"but ESP32 transmitted "
-            f"{actual_payload_bytes} B"
-        )
-
-
-    # --------------------------------------------------------
-    # Packet counts
-    # --------------------------------------------------------
 
     packets_sent = len(
         packets
@@ -1214,17 +934,17 @@ def build_measurement(
 
 
     packet_loss_pct = (
+
         packets_lost
+
         / packets_sent
+
         * 100.0
     )
 
 
     # --------------------------------------------------------
     # RSSI
-    #
-    # For this Bluetooth implementation this will normally
-    # remain None because sender reports -127 as unavailable.
     # --------------------------------------------------------
 
     rssi_values = [
@@ -1247,7 +967,7 @@ def build_measurement(
 
 
     # --------------------------------------------------------
-    # RTT / latency
+    # RTT
     # --------------------------------------------------------
 
     rtts = [
@@ -1295,7 +1015,7 @@ def build_measurement(
 
 
     # --------------------------------------------------------
-    # Application payload throughput
+    # Throughput
     # --------------------------------------------------------
 
     successful_bytes = sum(
@@ -1313,15 +1033,19 @@ def build_measurement(
 
 
     throughput_kbps = (
+
         successful_bytes
+
         * 8
+
         / duration_seconds
+
         / 1000
     )
 
 
     # --------------------------------------------------------
-    # Retry count
+    # Retries
     # --------------------------------------------------------
 
     total_retries = sum(
@@ -1334,335 +1058,223 @@ def build_measurement(
 
 
     # --------------------------------------------------------
-    # Overall experiment success
+    # Current
     # --------------------------------------------------------
+
+    current_values = [
+
+        packet.current_ma
+
+        for packet
+        in packets
+
+        if packet.current_ma
+        is not None
+    ]
+
+
+    current_mean_ma = (
+        mean_or_none(
+            current_values
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Energy
+    #
+    # Each PKT energy represents its complete start-to-start
+    # transmission period.
+    # --------------------------------------------------------
+
+    energy_values = [
+
+        packet.energy_mj
+
+        for packet
+        in packets
+
+        if packet.energy_mj
+        is not None
+    ]
+
+
+    estimated_energy_mj = (
+
+        sum(
+            energy_values
+        )
+
+        if energy_values
+
+        else None
+    )
+
 
     successful = (
         packets_received > 0
     )
 
 
-    # ========================================================
-    # DATABASE / FASTAPI PAYLOAD
-    # ========================================================
-
     return {
-
-        # ----------------------------------------------------
-        # Identification
-        # ----------------------------------------------------
 
         "timestamp":
             datetime.now(
                 timezone.utc
             ).isoformat(),
 
-
         "experiment_id":
             build_experiment_id(
                 repetition
             ),
 
-
         "protocol":
             PROTOCOL,
-
 
         "radio_family":
             RADIO_FAMILY,
 
-
         "source_node":
             SOURCE_NODE,
-
 
         "destination_node":
             DESTINATION_NODE,
 
-
-        # ----------------------------------------------------
-        # Distance
-        # ----------------------------------------------------
-
         "distance_m":
             DISTANCE_M,
-
-
-        # ----------------------------------------------------
-        # Environment
-        # ----------------------------------------------------
 
         "environment":
             ENVIRONMENT,
 
-
-        # ----------------------------------------------------
-        # Visibility
-        # ----------------------------------------------------
-
         "line_of_sight":
             LINE_OF_SIGHT,
-
-
-        # ----------------------------------------------------
-        # Obstacle
-        # ----------------------------------------------------
 
         "obstacle_type":
             OBSTACLE_TYPE,
 
-
-        # ----------------------------------------------------
-        # Additional physical metadata
-        # ----------------------------------------------------
-
         "mobility":
             MOBILITY,
-
 
         "interference_level":
             INTERFERENCE_LEVEL,
 
-
-        # ----------------------------------------------------
-        # Payload
-        # ----------------------------------------------------
-
         "payload_bytes":
             actual_payload_bytes,
-
-
-        # ----------------------------------------------------
-        # Packet interval
-        # ----------------------------------------------------
 
         "packet_interval_ms":
             PACKET_INTERVAL_MS,
 
-
-        # ----------------------------------------------------
-        # Number of packets measured
-        # ----------------------------------------------------
-
         "packet_count":
             packets_sent,
-
-
-        # ----------------------------------------------------
-        # Traffic requirement
-        # ----------------------------------------------------
 
         "traffic_type":
             TRAFFIC_REQUIREMENT,
 
-
-        # ----------------------------------------------------
-        # Application requirements
-        # ----------------------------------------------------
-
         "qos_priority":
             QOS_PRIORITY,
-
 
         "required_latency_ms":
             REQUIRED_LATENCY_MS,
 
-
         "required_throughput_kbps":
             REQUIRED_THROUGHPUT_KBPS,
-
 
         "reliability_requirement":
             RELIABILITY_REQUIREMENT,
 
-
         "power_priority":
             POWER_PRIORITY,
-
 
         "range_requirement_m":
             RANGE_REQUIREMENT_M,
 
-
-        # ----------------------------------------------------
-        # Radio measurements
-        # ----------------------------------------------------
-
         "rssi_dbm":
             rssi_mean,
-
 
         "snr_db":
             None,
 
-
         "link_quality":
             None,
-
 
         "tx_power_dbm":
             TX_POWER_DBM,
 
-
-        # ----------------------------------------------------
-        # Reliability measurements
-        # ----------------------------------------------------
-
         "packets_sent":
             packets_sent,
-
 
         "packets_received":
             packets_received,
 
-
         "packets_lost":
             packets_lost,
-
 
         "packet_loss_pct":
             packet_loss_pct,
 
-
-        # ----------------------------------------------------
-        # Latency
-        #
-        # Individual RTT values are aggregated into the
-        # latency statistics below.
-        # ----------------------------------------------------
-
         "rtt_ms":
             latency_mean,
-
 
         "latency_mean_ms":
             latency_mean,
 
-
         "latency_min_ms":
             latency_min,
-
 
         "latency_max_ms":
             latency_max,
 
-
         "jitter_ms":
             jitter,
 
-
-        # ----------------------------------------------------
-        # Throughput
-        # ----------------------------------------------------
-
         "throughput_kbps":
             throughput_kbps,
-
-
-        # ----------------------------------------------------
-        # Experiment duration
-        # ----------------------------------------------------
 
         "transfer_time_ms":
             duration_seconds
             * 1000.0,
 
-
-        # ----------------------------------------------------
-        # Reliability / connection
-        # ----------------------------------------------------
-
         "retries":
             total_retries,
-
 
         "connection_setup_ms":
             None,
 
-
         "disconnect_count":
             None,
-
-
-        # ----------------------------------------------------
-        # Power
-        # ----------------------------------------------------
 
         "battery_voltage":
             BATTERY_VOLTAGE,
 
-
         "current_ma":
-            CURRENT_MA,
-
+            current_mean_ma,
 
         "estimated_energy_mj":
-            None,
-
-
-        # ----------------------------------------------------
-        # Wi-Fi-specific
-        #
-        # Must be NULL for Bluetooth.
-        # ----------------------------------------------------
+            estimated_energy_mj,
 
         "wifi_channel":
-            WIFI_CHANNEL,
-
-
-        # ----------------------------------------------------
-        # BLE-specific
-        # ----------------------------------------------------
+            None,
 
         "ble_phy":
-            BLE_PHY,
-
-
-        # ----------------------------------------------------
-        # Bluetooth Classic-specific
-        #
-        # This will now be:
-        #
-        # "SPP"
-        #
-        # instead of null.
-        # ----------------------------------------------------
+            None,
 
         "bt_mode":
             BT_MODE,
 
-
-        # ----------------------------------------------------
-        # LoRa-specific
-        # ----------------------------------------------------
-
         "lora_sf":
-            LORA_SF,
-
+            None,
 
         "lora_bw":
-            LORA_BW,
-
+            None,
 
         "lora_cr":
-            LORA_CR,
-
-
-        # ----------------------------------------------------
-        # Cellular-specific
-        # ----------------------------------------------------
+            None,
 
         "cellular_generation":
-            CELLULAR_GENERATION,
-
+            None,
 
         "cell_signal_dbm":
-            CELL_SIGNAL_DBM,
-
-
-        # ----------------------------------------------------
-        # Overall status
-        # ----------------------------------------------------
+            None,
 
         "successful":
             successful,
@@ -1769,9 +1381,6 @@ def send_measurement(
             return True
 
 
-        print()
-
-
         print(
             "[API ERROR]",
             response.status_code,
@@ -1804,6 +1413,12 @@ def send_measurement(
 def save_failed_measurement(
     measurement: dict,
 ) -> None:
+
+    FAILED_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
 
     with FAILED_FILE.open(
 
@@ -1887,7 +1502,8 @@ def print_experiment_configuration(
 
     print(
         f"Packet interval      : "
-        f"{PACKET_INTERVAL_MS} ms"
+        f"{PACKET_INTERVAL_MS} ms "
+        f"(start-to-start)"
     )
 
 
@@ -1922,6 +1538,12 @@ def print_experiment_configuration(
     print(
         f"Test duration        : "
         f"{TEST_DURATION_SECONDS} seconds"
+    )
+
+
+    print(
+        f"Dataset voltage      : "
+        f"{BATTERY_VOLTAGE:.2f} V"
     )
 
 
@@ -2007,7 +1629,6 @@ def print_measurement_summary(
             f"{measurement['rssi_dbm']:.2f} dBm"
         )
 
-
     else:
 
         print(
@@ -2027,11 +1648,36 @@ def print_measurement_summary(
             f"{measurement['latency_mean_ms']:.2f} ms"
         )
 
-
     else:
 
         print(
             "Mean RTT      : N/A"
+        )
+
+
+    if (
+        measurement[
+            "latency_min_ms"
+        ]
+        is not None
+    ):
+
+        print(
+            "Minimum RTT   : "
+            f"{measurement['latency_min_ms']:.2f} ms"
+        )
+
+
+    if (
+        measurement[
+            "latency_max_ms"
+        ]
+        is not None
+    ):
+
+        print(
+            "Maximum RTT   : "
+            f"{measurement['latency_max_ms']:.2f} ms"
         )
 
 
@@ -2046,7 +1692,6 @@ def print_measurement_summary(
             "Jitter        : "
             f"{measurement['jitter_ms']:.2f} ms"
         )
-
 
     else:
 
@@ -2063,7 +1708,111 @@ def print_measurement_summary(
 
     print(
         "Test duration : "
-        f"{measurement['transfer_time_ms'] / 1000:.2f} s"
+        f"{measurement['transfer_time_ms'] / 1000:.3f} s"
+    )
+
+
+    print(
+        "Retries       : "
+        f"{measurement['retries']}"
+    )
+
+
+    print(
+        "-" * 68
+    )
+
+
+    print(
+        "POWER / ENERGY"
+    )
+
+
+    print(
+        "Voltage       : "
+        f"{measurement['battery_voltage']:.2f} V"
+    )
+
+
+    if (
+        measurement[
+            "current_ma"
+        ]
+        is not None
+    ):
+
+        print(
+            "Mean current  : "
+            f"{measurement['current_ma']:.2f} mA"
+        )
+
+    else:
+
+        print(
+            "Mean current  : N/A"
+        )
+
+
+    if (
+        measurement[
+            "estimated_energy_mj"
+        ]
+        is not None
+    ):
+
+        print(
+            "Energy        : "
+            f"{measurement['estimated_energy_mj']:.3f} mJ"
+        )
+
+    else:
+
+        print(
+            "Energy        : N/A"
+        )
+
+
+    if (
+        measurement[
+            "current_ma"
+        ]
+        is not None
+    ):
+
+        average_power_mw = (
+
+            measurement[
+                "battery_voltage"
+            ]
+
+            *
+
+            measurement[
+                "current_ma"
+            ]
+        )
+
+
+        print(
+            "Average power : "
+            f"{average_power_mw:.2f} mW"
+        )
+
+
+    print(
+        "-" * 68
+    )
+
+
+    print(
+        "Successful    : "
+        + (
+            "YES"
+            if measurement[
+                "successful"
+            ]
+            else "NO"
+        )
     )
 
 
@@ -2089,14 +1838,33 @@ def collect_repetition(
     )
 
 
-    # --------------------------------------------------------
-    # Clear stale serial output
-    # --------------------------------------------------------
-
     ser.reset_input_buffer()
 
 
+    # --------------------------------------------------------
+    # Temporarily reduce serial timeout.
+    #
+    # This prevents readline() from extending a 20-second
+    # experiment by up to one whole second.
+    # --------------------------------------------------------
+
+    original_timeout = (
+        ser.timeout
+    )
+
+
+    ser.timeout = 0.05
+
+
     window.start()
+
+
+    deadline = (
+
+        window.started_at
+
+        + TEST_DURATION_SECONDS
+    )
 
 
     print()
@@ -2118,8 +1886,15 @@ def collect_repetition(
 
 
     print(
-        f"[TEST] Duration: "
-        f"{TEST_DURATION_SECONDS}s"
+        f"[TEST] Exact duration target: "
+        f"{TEST_DURATION_SECONDS}.000 s"
+    )
+
+
+    print(
+        f"[TEST] Packet interval: "
+        f"{PACKET_INTERVAL_MS} ms "
+        f"start-to-start"
     )
 
 
@@ -2129,132 +1904,210 @@ def collect_repetition(
     )
 
 
-    while (
-        window.elapsed_seconds
-        < TEST_DURATION_SECONDS
-    ):
+    try:
 
-        raw = (
-            ser.readline()
-        )
-
-
-        if not raw:
-
-            continue
-
-
-        line = (
-            raw.decode(
-                "utf-8",
-                errors="replace",
-            )
-            .strip()
-        )
-
-
-        if not line:
-
-            continue
-
-
-        # ----------------------------------------------------
-        # ESP32 debug/startup messages
-        # ----------------------------------------------------
-
-        if not line.startswith(
-            "PKT,"
+        while (
+            time.monotonic()
+            < deadline
         ):
+
+            raw = (
+                ser.readline()
+            )
+
+
+            if not raw:
+
+                continue
+
+
+            line = (
+                raw.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                .strip()
+            )
+
+
+            if not line:
+
+                continue
+
+
+            if not line.startswith(
+                "PKT,"
+            ):
+
+                print(
+                    "[ESP]",
+                    line,
+                )
+
+                continue
+
+
+            packet = (
+                parse_packet_line(
+                    line
+                )
+            )
+
+
+            if (
+                packet is None
+            ):
+
+                continue
+
+
+            if not validate_packet_configuration(
+                packet
+            ):
+
+                continue
+
+
+            window.add(
+                packet
+            )
+
+
+            status = (
+                "OK"
+                if packet.successful
+                else "LOST"
+            )
+
+
+            rtt_text = (
+
+                f"{packet.rtt_ms:.2f}ms"
+
+                if packet.rtt_ms
+                is not None
+
+                else "-"
+            )
+
+
+            rssi_text = (
+
+                f"{packet.rssi_dbm:.1f}dBm"
+
+                if packet.rssi_dbm
+                is not None
+
+                else "N/A"
+            )
+
+
+            current_text = (
+
+                f"{packet.current_ma:.2f}mA"
+
+                if packet.current_ma
+                is not None
+
+                else "-"
+            )
+
+
+            energy_text = (
+
+                f"{packet.energy_mj:.4f}mJ"
+
+                if packet.energy_mj
+                is not None
+
+                else "-"
+            )
+
 
             print(
-                "[ESP]",
-                line,
+
+                f"[PKT] "
+                f"id={packet.packet_id:<6d} "
+                f"{status:<4s} "
+                f"payload={packet.payload_bytes:<4d}B "
+                f"RSSI={rssi_text:>9s} "
+                f"RTT={rtt_text:>9s} "
+                f"I={current_text:>11s} "
+                f"E={energy_text:>13s}"
             )
 
 
-            continue
+    finally:
+
+        window.stop()
 
 
-        # ----------------------------------------------------
-        # Parse PKT line
-        # ----------------------------------------------------
-
-        packet = (
-            parse_packet_line(
-                line
-            )
+        ser.timeout = (
+            original_timeout
         )
 
 
-        if (
-            packet is None
-        ):
-
-            continue
+    print()
 
 
-        # ----------------------------------------------------
-        # Prevent wrongly labelled payload data
-        # ----------------------------------------------------
-
-        if not validate_packet_configuration(
-            packet
-        ):
-
-            continue
+    print(
+        "[TEST] Collection finished"
+    )
 
 
-        # ----------------------------------------------------
-        # Store packet
-        # ----------------------------------------------------
-
-        window.add(
-            packet
-        )
+    print(
+        f"[TEST] Valid packets collected: "
+        f"{len(window.packets)}"
+    )
 
 
-        # ----------------------------------------------------
-        # Human-readable status
-        # ----------------------------------------------------
-
-        status = (
-            "OK"
-            if packet.successful
-            else "LOST"
-        )
+    print(
+        f"[TEST] Actual duration: "
+        f"{window.elapsed_seconds:.3f} s"
+    )
 
 
-        rtt_text = (
-            f"{packet.rtt_ms:.2f}ms"
+    current_values = [
 
-            if packet.rtt_ms
-            is not None
+        packet.current_ma
 
-            else "-"
-        )
+        for packet
+        in window.packets
+
+        if packet.current_ma
+        is not None
+    ]
 
 
-        rssi_text = (
-            f"{packet.rssi_dbm:.1f}dBm"
+    energy_values = [
 
-            if packet.rssi_dbm
-            is not None
+        packet.energy_mj
 
-            else "N/A"
-        )
+        for packet
+        in window.packets
 
+        if packet.energy_mj
+        is not None
+    ]
+
+
+    if current_values:
 
         print(
-            f"[PKT] "
-            f"id={packet.packet_id:<6d} "
-            f"{status:<4s} "
-            f"payload={packet.payload_bytes:<4d}B "
-            f"RSSI={rssi_text:>9s} "
-            f"RTT={rtt_text:>9s}"
+            f"[TEST] Mean current: "
+            f"{statistics.fmean(current_values):.2f} mA"
         )
 
 
-    window.stop()
+    if energy_values:
+
+        print(
+            f"[TEST] Integrated energy: "
+            f"{sum(energy_values):.3f} mJ"
+        )
+
+
+    print()
 
 
     return window
@@ -2267,26 +2120,11 @@ def collect_repetition(
 def main(
 ) -> None:
 
-    # --------------------------------------------------------
-    # Validate experiment configuration
-    # --------------------------------------------------------
-
     validate_configuration()
 
 
-    # --------------------------------------------------------
-    # Print experiment settings
-    # --------------------------------------------------------
-
     print_experiment_configuration()
 
-
-    # --------------------------------------------------------
-    # Check API
-    #
-    # Experiment is still allowed to continue if API is down.
-    # Failed measurements will be stored locally.
-    # --------------------------------------------------------
 
     check_api()
 
@@ -2308,15 +2146,10 @@ def main(
 
                 BAUD_RATE,
 
-                timeout=
-                    1,
+                timeout=1,
 
             ) as ser:
 
-
-                # ------------------------------------------------
-                # ESP32 may reset when serial port opens
-                # ------------------------------------------------
 
                 time.sleep(
                     2
@@ -2328,25 +2161,13 @@ def main(
                 )
 
 
-                # ------------------------------------------------
-                # Configure sender
-                # ------------------------------------------------
-
                 configure_esp32(
                     ser
                 )
 
 
-                # ------------------------------------------------
-                # Remove remaining CONFIG/debug messages
-                # ------------------------------------------------
-
                 ser.reset_input_buffer()
 
-
-                # ================================================
-                # RUN ALL REPETITIONS
-                # ================================================
 
                 for repetition in range(
 
@@ -2366,24 +2187,15 @@ def main(
                     )
 
 
-                    # --------------------------------------------
-                    # No packets collected
-                    # --------------------------------------------
-
                     if not window.packets:
 
                         print(
                             "[WARNING] No valid packets "
-                            "collected during this repetition."
+                            "collected."
                         )
-
 
                         continue
 
-
-                    # --------------------------------------------
-                    # Build experiment measurement
-                    # --------------------------------------------
 
                     measurement = (
                         build_measurement(
@@ -2395,10 +2207,6 @@ def main(
                     )
 
 
-                    # --------------------------------------------
-                    # Display summary
-                    # --------------------------------------------
-
                     print_measurement_summary(
 
                         measurement,
@@ -2407,10 +2215,6 @@ def main(
                     )
 
 
-                    # --------------------------------------------
-                    # Send to API
-                    # --------------------------------------------
-
                     success = (
                         send_measurement(
                             measurement
@@ -2418,20 +2222,12 @@ def main(
                     )
 
 
-                    # --------------------------------------------
-                    # Local backup if API submission fails
-                    # --------------------------------------------
-
                     if not success:
 
                         save_failed_measurement(
                             measurement
                         )
 
-
-                    # --------------------------------------------
-                    # Separate independent repetitions
-                    # --------------------------------------------
 
                     if (
                         repetition
@@ -2510,10 +2306,6 @@ def main(
                 0
             )
 
-
-# ============================================================
-#                     PROGRAM ENTRY
-# ============================================================
 
 if __name__ == "__main__":
 

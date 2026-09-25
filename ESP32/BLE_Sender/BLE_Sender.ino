@@ -14,41 +14,132 @@
 #define RX_CHARACTERISTIC   "12345678-1234-1234-1234-123456789001"
 #define TX_CHARACTERISTIC   "12345678-1234-1234-1234-123456789002"
 
-// ------------------------------------------------------------
-// Dataset parameters
-// ------------------------------------------------------------
+// ============================================================
+// ACS712 CURRENT SENSOR
+// ============================================================
 
+// Change this only if your ACS712 OUT pin uses another ADC pin.
+#define ACS712_PIN 34
+
+// ACS712-5A sensitivity = 185 mV/A.
+// Use 100.0f for 20A module or 66.0f for 30A module.
+#define ACS712_SENSITIVITY_MV_PER_A 185.0f
+
+// IMPORTANT:
+// Set this to your measured zero-current ACS712 output voltage.
+// Do not auto-calibrate while the ESP32 is connected as the load.
+#define ACS712_ZERO_CURRENT_MV 2500.0f
+
+// Dataset voltage assumption.
+#define SUPPLY_VOLTAGE 3.3f
+
+// Current telemetry sampling interval.
+// 10 ms = approximately 100 current samples/second.
+#define POWER_SAMPLE_INTERVAL_MS 10
+
+// ============================================================
+// DATASET PARAMETERS
+// ============================================================
+
+# define MAX_PAYLOAD_SIZE 2048
 uint16_t payloadSize = 16;
-
 uint32_t packetIntervalMs = 500;
 
-// ------------------------------------------------------------
+// ============================================================
 // BLE
-// ------------------------------------------------------------
+// ============================================================
 
 BLEAdvertisedDevice *targetDevice = nullptr;
-
 BLEClient *pClient = nullptr;
-
 BLERemoteCharacteristic *pRxCharacteristic = nullptr;
 BLERemoteCharacteristic *pTxCharacteristic = nullptr;
 
-// ------------------------------------------------------------
-// Connection state
-// ------------------------------------------------------------
+// ============================================================
+// CONNECTION STATE
+// ============================================================
 
 bool connected = false;
+volatile bool ackReceived = false;
+volatile uint32_t ackSequence = 0;
 
-bool ackReceived = false;
-
-uint32_t ackSequence = 0;
-
-// ------------------------------------------------------------
-// Packet sequence
-// ------------------------------------------------------------
+// ============================================================
+// PACKET SEQUENCE
+// ============================================================
 
 uint32_t sequenceNumber = 0;
 
+// ============================================================
+// POWER SAMPLING STATE
+// ============================================================
+
+uint32_t lastPowerSampleMs = 0;
+
+// ============================================================
+// READ ACS712 CURRENT
+// ============================================================
+
+float readCurrentMa() {
+
+  uint32_t milliVolts =
+      analogReadMilliVolts(
+        ACS712_PIN
+      );
+
+  float differenceMv =
+      (float)milliVolts -
+      ACS712_ZERO_CURRENT_MV;
+
+  float currentA =
+      differenceMv /
+      ACS712_SENSITIVITY_MV_PER_A;
+
+  // Small negative readings are normally ADC / offset noise.
+  if (currentA < 0.0f) {
+    currentA = 0.0f;
+  }
+
+  return currentA * 1000.0f;
+}
+
+// ============================================================
+// POWER TELEMETRY
+//
+// PWR,current_ma,timestamp_us
+//
+// Python integrates these samples over the experiment window.
+// ============================================================
+
+void samplePowerTelemetry() {
+
+  uint32_t nowMs = millis();
+
+  if (
+    (uint32_t)(nowMs - lastPowerSampleMs) <
+    POWER_SAMPLE_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  // Keep the schedule anchored instead of resetting to now.
+  lastPowerSampleMs += POWER_SAMPLE_INTERVAL_MS;
+
+  // If startup / blocking work caused a large delay, resynchronise
+  // rather than trying to emit hundreds of catch-up samples.
+  if (
+    (uint32_t)(nowMs - lastPowerSampleMs) >
+    (POWER_SAMPLE_INTERVAL_MS * 5UL)
+  ) {
+    lastPowerSampleMs = nowMs;
+  }
+
+  float currentMa = readCurrentMa();
+  uint32_t timestampUs = micros();
+
+  Serial.print("PWR,");
+  Serial.print(currentMa, 3);
+  Serial.print(",");
+  Serial.println(timestampUs);
+}
 
 // ============================================================
 // NOTIFICATION CALLBACK
@@ -61,7 +152,7 @@ static void notifyCallback(
   bool isNotify
 ) {
 
-  if (length < 4) {
+  if (length < sizeof(uint32_t)) {
     return;
   }
 
@@ -74,33 +165,23 @@ static void notifyCallback(
   );
 
   ackSequence = receivedSequence;
-
   ackReceived = true;
 }
-
 
 // ============================================================
 // BLE SCAN CALLBACK
 // ============================================================
 
 class AdvertisedDeviceCallbacks :
-  public BLEAdvertisedDeviceCallbacks {
+    public BLEAdvertisedDeviceCallbacks {
 
   void onResult(
     BLEAdvertisedDevice advertisedDevice
   ) override {
 
-    // --------------------------------------------------------
-    // Ignore devices without service UUID
-    // --------------------------------------------------------
-
     if (!advertisedDevice.haveServiceUUID()) {
       return;
     }
-
-    // --------------------------------------------------------
-    // Check NEXORA service UUID
-    // --------------------------------------------------------
 
     if (
       !advertisedDevice.isAdvertisingService(
@@ -110,15 +191,10 @@ class AdvertisedDeviceCallbacks :
       return;
     }
 
-    // --------------------------------------------------------
-    // Correct receiver found
-    // --------------------------------------------------------
-
     Serial.println();
     Serial.println("BLE_TARGET_FOUND");
 
     Serial.print("BLE_ADDRESS,");
-
     Serial.println(
       advertisedDevice
         .getAddress()
@@ -129,35 +205,22 @@ class AdvertisedDeviceCallbacks :
     Serial.print("BLE_NAME,");
 
     if (advertisedDevice.haveName()) {
-
       Serial.println(
         advertisedDevice
           .getName()
           .c_str()
       );
-
     } else {
-
       Serial.println("UNKNOWN");
     }
 
     Serial.print("BLE_RSSI,");
-
     Serial.println(
       advertisedDevice.getRSSI()
     );
 
-    // --------------------------------------------------------
-    // Save discovered receiver BEFORE stopping scan
-    //
-    // Stopping the scanner may unblock pScan->start()
-    // immediately, so targetDevice must already be valid.
-    // --------------------------------------------------------
-
     if (targetDevice != nullptr) {
-
       delete targetDevice;
-
       targetDevice = nullptr;
     }
 
@@ -166,18 +229,11 @@ class AdvertisedDeviceCallbacks :
           advertisedDevice
         );
 
-    Serial.println(
-      "BLE_TARGET_SAVED"
-    );
-
-    // --------------------------------------------------------
-    // Stop scanning only after device is stored
-    // --------------------------------------------------------
+    Serial.println("BLE_TARGET_SAVED");
 
     BLEDevice::getScan()->stop();
   }
 };
-
 
 // ============================================================
 // CONNECT TO RECEIVER
@@ -185,16 +241,8 @@ class AdvertisedDeviceCallbacks :
 
 bool connectToReceiver() {
 
-  // ----------------------------------------------------------
-  // Validate discovered device
-  // ----------------------------------------------------------
-
   if (targetDevice == nullptr) {
-
-    Serial.println(
-      "BLE_CONNECT_FAIL,NO_TARGET"
-    );
-
+    Serial.println("BLE_CONNECT_FAIL,NO_TARGET");
     return false;
   }
 
@@ -202,7 +250,6 @@ bool connectToReceiver() {
   Serial.println("BLE_CONNECTING");
 
   Serial.print("BLE_CONNECT_ADDRESS,");
-
   Serial.println(
     targetDevice
       ->getAddress()
@@ -210,55 +257,29 @@ bool connectToReceiver() {
       .c_str()
   );
 
-  // ----------------------------------------------------------
-  // Create client
-  // ----------------------------------------------------------
-
   if (pClient == nullptr) {
 
-    Serial.println(
-      "BLE_CLIENT_CREATING"
-    );
+    Serial.println("BLE_CLIENT_CREATING");
 
-    pClient =
-        BLEDevice::createClient();
+    pClient = BLEDevice::createClient();
 
     if (pClient == nullptr) {
-
-      Serial.println(
-        "BLE_CLIENT_CREATE_FAIL"
-      );
-
+      Serial.println("BLE_CLIENT_CREATE_FAIL");
       return false;
     }
 
-    Serial.println(
-      "BLE_CLIENT_CREATED"
-    );
+    Serial.println("BLE_CLIENT_CREATED");
   }
-
-  // ----------------------------------------------------------
-  // Disconnect old connection if necessary
-  // ----------------------------------------------------------
 
   if (pClient->isConnected()) {
 
-    Serial.println(
-      "BLE_OLD_CONNECTION_DISCONNECT"
-    );
+    Serial.println("BLE_OLD_CONNECTION_DISCONNECT");
 
     pClient->disconnect();
-
     delay(200);
   }
 
-  // ----------------------------------------------------------
-  // Connect
-  // ----------------------------------------------------------
-
-  Serial.println(
-    "BLE_CONNECT_ATTEMPT"
-  );
+  Serial.println("BLE_CONNECT_ATTEMPT");
 
   bool connectionResult =
       pClient->connect(
@@ -267,43 +288,25 @@ bool connectToReceiver() {
 
   if (!connectionResult) {
 
-    Serial.println(
-      "BLE_CONNECT_FAIL"
-    );
+    Serial.println("BLE_CONNECT_FAIL");
 
     connected = false;
-
     return false;
   }
 
-  Serial.println(
-    "BLE_CONNECTED"
-  );
+  Serial.println("BLE_CONNECTED");
 
   delay(200);
 
-  // ----------------------------------------------------------
-  // Verify connection
-  // ----------------------------------------------------------
-
   if (!pClient->isConnected()) {
 
-    Serial.println(
-      "BLE_CONNECTION_LOST"
-    );
+    Serial.println("BLE_CONNECTION_LOST");
 
     connected = false;
-
     return false;
   }
 
-  // ----------------------------------------------------------
-  // Find service
-  // ----------------------------------------------------------
-
-  Serial.println(
-    "BLE_SERVICE_SEARCH"
-  );
+  Serial.println("BLE_SERVICE_SEARCH");
 
   BLERemoteService *pService =
       pClient->getService(
@@ -312,29 +315,17 @@ bool connectToReceiver() {
 
   if (pService == nullptr) {
 
-    Serial.println(
-      "BLE_SERVICE_NOT_FOUND"
-    );
+    Serial.println("BLE_SERVICE_NOT_FOUND");
 
     pClient->disconnect();
-
     connected = false;
 
     return false;
   }
 
-  Serial.println(
-    "BLE_SERVICE_FOUND"
-  );
+  Serial.println("BLE_SERVICE_FOUND");
 
-  // ----------------------------------------------------------
-  // Find RX characteristic
-  // Sender writes packets here
-  // ----------------------------------------------------------
-
-  Serial.println(
-    "BLE_RX_SEARCH"
-  );
+  Serial.println("BLE_RX_SEARCH");
 
   pRxCharacteristic =
       pService->getCharacteristic(
@@ -343,39 +334,24 @@ bool connectToReceiver() {
 
   if (pRxCharacteristic == nullptr) {
 
-    Serial.println(
-      "BLE_RX_NOT_FOUND"
-    );
+    Serial.println("BLE_RX_NOT_FOUND");
 
     pClient->disconnect();
-
     connected = false;
 
     return false;
   }
 
-  Serial.println(
-    "BLE_RX_FOUND"
-  );
+  Serial.println("BLE_RX_FOUND");
 
-  Serial.print(
-    "BLE_RX_CAN_WRITE,"
-  );
-
+  Serial.print("BLE_RX_CAN_WRITE,");
   Serial.println(
     pRxCharacteristic->canWrite()
       ? "YES"
       : "NO"
   );
 
-  // ----------------------------------------------------------
-  // Find TX characteristic
-  // Receiver sends ACK here
-  // ----------------------------------------------------------
-
-  Serial.println(
-    "BLE_TX_SEARCH"
-  );
+  Serial.println("BLE_TX_SEARCH");
 
   pTxCharacteristic =
       pService->getCharacteristic(
@@ -384,70 +360,45 @@ bool connectToReceiver() {
 
   if (pTxCharacteristic == nullptr) {
 
-    Serial.println(
-      "BLE_TX_NOT_FOUND"
-    );
+    Serial.println("BLE_TX_NOT_FOUND");
 
     pClient->disconnect();
-
     connected = false;
 
     return false;
   }
 
-  Serial.println(
-    "BLE_TX_FOUND"
-  );
+  Serial.println("BLE_TX_FOUND");
 
-  Serial.print(
-    "BLE_TX_CAN_NOTIFY,"
-  );
-
+  Serial.print("BLE_TX_CAN_NOTIFY,");
   Serial.println(
     pTxCharacteristic->canNotify()
       ? "YES"
       : "NO"
   );
 
-  // ----------------------------------------------------------
-  // Register ACK notification
-  // ----------------------------------------------------------
-
   if (pTxCharacteristic->canNotify()) {
 
-    Serial.println(
-      "BLE_NOTIFY_REGISTERING"
-    );
+    Serial.println("BLE_NOTIFY_REGISTERING");
 
     pTxCharacteristic->registerForNotify(
       notifyCallback
     );
 
-    Serial.println(
-      "BLE_NOTIFY_REGISTERED"
-    );
+    Serial.println("BLE_NOTIFY_REGISTERED");
 
   } else {
 
-    Serial.println(
-      "BLE_NOTIFY_NOT_SUPPORTED"
-    );
+    Serial.println("BLE_NOTIFY_NOT_SUPPORTED");
   }
-
-  // ----------------------------------------------------------
-  // Connection complete
-  // ----------------------------------------------------------
 
   connected = true;
 
   Serial.println();
-  Serial.println(
-    "BLE_READY"
-  );
+  Serial.println("BLE_READY");
 
   return true;
 }
-
 
 // ============================================================
 // SCAN
@@ -455,82 +406,41 @@ bool connectToReceiver() {
 
 bool findReceiver() {
 
-  // ----------------------------------------------------------
-  // Clear previous target
-  // ----------------------------------------------------------
-
   if (targetDevice != nullptr) {
-
     delete targetDevice;
-
     targetDevice = nullptr;
   }
 
-  // ----------------------------------------------------------
-  // Get BLE scanner
-  // ----------------------------------------------------------
-
-  BLEScan *pScan =
-      BLEDevice::getScan();
-
-  // ----------------------------------------------------------
-  // Configure callbacks
-  // ----------------------------------------------------------
+  BLEScan *pScan = BLEDevice::getScan();
 
   pScan->setAdvertisedDeviceCallbacks(
     new AdvertisedDeviceCallbacks()
   );
 
-  // ----------------------------------------------------------
-  // Active scan required for scan-response data
-  // ----------------------------------------------------------
-
   pScan->setActiveScan(true);
-
   pScan->setInterval(100);
-
   pScan->setWindow(99);
 
-  // ----------------------------------------------------------
-  // Scan
-  // ----------------------------------------------------------
-
   Serial.println();
-  Serial.println(
-    "BLE_SCANNING"
-  );
+  Serial.println("BLE_SCANNING");
 
   pScan->start(
     5,
     false
   );
 
-  // ----------------------------------------------------------
-  // Allow scan callback to finish completely
-  // ----------------------------------------------------------
-
   delay(50);
-
-  // ----------------------------------------------------------
-  // Result
-  // ----------------------------------------------------------
 
   if (targetDevice == nullptr) {
 
-    Serial.println(
-      "BLE_TARGET_NOT_FOUND"
-    );
-
+    Serial.println("BLE_TARGET_NOT_FOUND");
     return false;
   }
 
-  Serial.println(
-    "BLE_SCAN_COMPLETE,TARGET_FOUND"
-  );
+  Serial.println("BLE_SCAN_COMPLETE,TARGET_FOUND");
 
   return true;
 }
-
 
 // ============================================================
 // SEND PACKET
@@ -543,46 +453,29 @@ void sendPacket() {
     pClient == nullptr ||
     !pClient->isConnected()
   ) {
-
     connected = false;
-
     return;
   }
 
-  // ----------------------------------------------------------
-  // Validate RX characteristic
-  // ----------------------------------------------------------
-
   if (pRxCharacteristic == nullptr) {
 
-    Serial.println(
-      "BLE_SEND_FAIL,NO_RX_CHARACTERISTIC"
-    );
+    Serial.println("BLE_SEND_FAIL,NO_RX_CHARACTERISTIC");
 
     connected = false;
-
     return;
   }
 
   sequenceNumber++;
 
-  // ----------------------------------------------------------
-  // Limit payload
-  // ----------------------------------------------------------
-
   if (payloadSize < 4) {
     payloadSize = 4;
   }
 
-  if (payloadSize > 240) {
-    payloadSize = 240;
+  if (payloadSize > MAX_PAYLOAD_SIZE) {
+    payloadSize = MAX_PAYLOAD_SIZE;
   }
 
-  uint8_t payload[240];
-
-  // ----------------------------------------------------------
-  // Fill packet with deterministic test data
-  // ----------------------------------------------------------
+  uint8_t payload[MAX_PAYLOAD_SIZE];
 
   memset(
     payload,
@@ -590,46 +483,27 @@ void sendPacket() {
     payloadSize
   );
 
-  // First 4 bytes = packet sequence number
-
   memcpy(
     payload,
     &sequenceNumber,
     sizeof(sequenceNumber)
   );
 
-  // Remaining bytes = dummy payload
-
   for (
     uint16_t i = 4;
     i < payloadSize;
     i++
   ) {
-
     payload[i] =
         (uint8_t)(
           (sequenceNumber + i) & 0xFF
         );
   }
 
-  // ----------------------------------------------------------
-  // Reset ACK state
-  // ----------------------------------------------------------
-
   ackReceived = false;
-
   ackSequence = 0;
 
-  // ----------------------------------------------------------
-  // Start RTT
-  // ----------------------------------------------------------
-
-  uint32_t txStartUs =
-      micros();
-
-  // ----------------------------------------------------------
-  // Transmit
-  // ----------------------------------------------------------
+  uint32_t txStartUs = micros();
 
   pRxCharacteristic->writeValue(
     payload,
@@ -637,36 +511,25 @@ void sendPacket() {
     true
   );
 
-  // ----------------------------------------------------------
-  // Wait for ACK
-  // ----------------------------------------------------------
-
   const uint32_t ACK_TIMEOUT_MS = 1000;
 
-  uint32_t waitStart =
-      millis();
+  uint32_t waitStart = millis();
 
   while (
     !ackReceived &&
-    (
-      millis() - waitStart <
-      ACK_TIMEOUT_MS
-    )
+    (millis() - waitStart < ACK_TIMEOUT_MS)
   ) {
+
+    // Continue sampling current while waiting for ACK.
+    samplePowerTelemetry();
 
     delay(1);
   }
 
-  uint32_t txEndUs =
-      micros();
-
-  // ----------------------------------------------------------
-  // Result
-  // ----------------------------------------------------------
+  uint32_t txEndUs = micros();
 
   uint8_t success = 0;
-
-  float rttMs = -1.0;
+  float rttMs = -1.0f;
 
   if (
     ackReceived &&
@@ -676,13 +539,9 @@ void sendPacket() {
     success = 1;
 
     rttMs =
-        (txEndUs - txStartUs)
-        / 1000.0f;
+        (txEndUs - txStartUs) /
+        1000.0f;
   }
-
-  // ----------------------------------------------------------
-  // RSSI
-  // ----------------------------------------------------------
 
   int rssi = -127;
 
@@ -690,20 +549,13 @@ void sendPacket() {
     pClient != nullptr &&
     pClient->isConnected()
   ) {
-
-    rssi =
-        pClient->getRssi();
+    rssi = pClient->getRssi();
   }
 
-  // ----------------------------------------------------------
-  // Timestamp
-  // ----------------------------------------------------------
-
-  uint32_t timestampUs =
-      micros();
+  uint32_t timestampUs = micros();
 
   // ==========================================================
-  // SERIAL OUTPUT
+  // PACKET SERIAL OUTPUT
   //
   // PKT,
   // sequence,
@@ -712,7 +564,7 @@ void sendPacket() {
   // RTT,
   // success,
   // retries,
-  // timestamp
+  // timestamp_us
   // ==========================================================
 
   Serial.print("PKT,");
@@ -731,7 +583,6 @@ void sendPacket() {
   Serial.println(timestampUs);
 }
 
-
 // ============================================================
 // SERIAL CONFIGURATION
 // ============================================================
@@ -747,15 +598,7 @@ void handleSerial() {
 
   command.trim();
 
-  // ----------------------------------------------------------
-  // Expected:
-  //
-  // CONFIG,16,500
-  // ----------------------------------------------------------
-
-  if (
-    command.startsWith("CONFIG,")
-  ) {
+  if (command.startsWith("CONFIG,")) {
 
     int firstComma =
         command.indexOf(',');
@@ -782,25 +625,17 @@ void handleSerial() {
             secondComma + 1
           ).toInt();
 
-      // --------------------------------------------------------
-      // Safety
-      // --------------------------------------------------------
-
       if (payloadSize < 4) {
         payloadSize = 4;
       }
 
-      if (payloadSize > 240) {
-        payloadSize = 240;
+      if (payloadSize > MAX_PAYLOAD_SIZE) {
+        payloadSize = MAX_PAYLOAD_SIZE;
       }
 
       if (packetIntervalMs < 10) {
         packetIntervalMs = 10;
       }
-
-      // --------------------------------------------------------
-      // Config response
-      // --------------------------------------------------------
 
       Serial.print("CONFIG_OK,");
       Serial.print(payloadSize);
@@ -809,7 +644,6 @@ void handleSerial() {
     }
   }
 }
-
 
 // ============================================================
 // SETUP
@@ -827,24 +661,58 @@ void setup() {
   Serial.println("====================================");
 
   // ----------------------------------------------------------
-  // Initialize BLE
+  // ACS712
   // ----------------------------------------------------------
 
-  Serial.println(
-    "BLE_INITIALIZING"
+  pinMode(
+    ACS712_PIN,
+    INPUT
   );
+
+  analogReadResolution(12);
+
+  analogSetPinAttenuation(
+    ACS712_PIN,
+    ADC_11db
+  );
+
+  Serial.print("ACS712_PIN,");
+  Serial.println(ACS712_PIN);
+
+  Serial.print("ACS712_ZERO_MV,");
+  Serial.println(
+    ACS712_ZERO_CURRENT_MV,
+    2
+  );
+
+  Serial.print("ACS712_SENSITIVITY_MV_PER_A,");
+  Serial.println(
+    ACS712_SENSITIVITY_MV_PER_A,
+    2
+  );
+
+  Serial.print("SUPPLY_VOLTAGE,");
+  Serial.println(
+    SUPPLY_VOLTAGE,
+    2
+  );
+
+  Serial.print("POWER_SAMPLE_INTERVAL_MS,");
+  Serial.println(
+    POWER_SAMPLE_INTERVAL_MS
+  );
+
+  // ----------------------------------------------------------
+  // BLE
+  // ----------------------------------------------------------
+
+  Serial.println("BLE_INITIALIZING");
 
   BLEDevice::init(
     "NEXORA_BLE_TX"
   );
 
-  Serial.println(
-    "BLE_INITIALIZED"
-  );
-
-  // ----------------------------------------------------------
-  // Search until receiver is found and connected
-  // ----------------------------------------------------------
+  Serial.println("BLE_INITIALIZED");
 
   while (!connected) {
 
@@ -856,23 +724,18 @@ void setup() {
     }
 
     Serial.println();
-    Serial.println(
-      "BLE_RETRY"
-    );
+    Serial.println("BLE_RETRY");
 
     delay(2000);
   }
-
-  // ----------------------------------------------------------
-  // Initial config line
-  // ----------------------------------------------------------
 
   Serial.print("CONFIG_OK,");
   Serial.print(payloadSize);
   Serial.print(",");
   Serial.println(packetIntervalMs);
-}
 
+  lastPowerSampleMs = millis();
+}
 
 // ============================================================
 // LOOP
@@ -880,17 +743,13 @@ void setup() {
 
 void loop() {
 
-  static uint32_t lastPacketTime = 0;
-
-  // ----------------------------------------------------------
-  // Serial commands from Python
-  // ----------------------------------------------------------
+  static bool packetSchedulerInitialized = false;
+  static uint32_t nextPacketTime = 0;
 
   handleSerial();
 
-  // ----------------------------------------------------------
-  // Reconnect
-  // ----------------------------------------------------------
+  // Continuous current sampling while the device is idle.
+  samplePowerTelemetry();
 
   if (
     pClient == nullptr ||
@@ -898,10 +757,7 @@ void loop() {
   ) {
 
     if (connected) {
-
-      Serial.println(
-        "BLE_DISCONNECTED"
-      );
+      Serial.println("BLE_DISCONNECTED");
     }
 
     connected = false;
@@ -909,15 +765,14 @@ void loop() {
     pRxCharacteristic = nullptr;
     pTxCharacteristic = nullptr;
 
+    packetSchedulerInitialized = false;
+
     delay(500);
 
     if (findReceiver()) {
 
       if (!connectToReceiver()) {
-
-        Serial.println(
-          "BLE_RECONNECT_FAIL"
-        );
+        Serial.println("BLE_RECONNECT_FAIL");
       }
     }
 
@@ -925,16 +780,39 @@ void loop() {
   }
 
   // ----------------------------------------------------------
-  // Packet transmission
+  // Exact packet schedule
+  //
+  // The next transmission time is advanced by the configured
+  // interval rather than by the duration of sendPacket().
   // ----------------------------------------------------------
 
+  if (!packetSchedulerInitialized) {
+
+    nextPacketTime =
+        millis() +
+        packetIntervalMs;
+
+    packetSchedulerInitialized = true;
+  }
+
+  uint32_t nowMs = millis();
+
   if (
-    millis() - lastPacketTime >=
-    packetIntervalMs
+    (int32_t)(nowMs - nextPacketTime) >= 0
   ) {
 
-    lastPacketTime =
-        millis();
+    nextPacketTime += packetIntervalMs;
+
+    // If execution fell far behind, resynchronise instead of
+    // bursting many packets back-to-back.
+    if (
+      (int32_t)(nowMs - nextPacketTime) >=
+      (int32_t)packetIntervalMs
+    ) {
+      nextPacketTime =
+          nowMs +
+          packetIntervalMs;
+    }
 
     sendPacket();
   }
