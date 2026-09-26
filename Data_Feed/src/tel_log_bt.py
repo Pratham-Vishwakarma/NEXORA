@@ -1,142 +1,84 @@
 from __future__ import annotations
-
 import json
 import statistics
 import sys
 import time
-
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-
 import requests
 import serial
-
 from serial import SerialException
-
 
 # ============================================================
 #                EXPERIMENT VARIABLES
 # ============================================================
-
 DISTANCE_M = 0.0
-
 PAYLOAD_BYTES = 2048
-
 PACKET_INTERVAL_MS = 1000
-
 ENVIRONMENT = "INDOOR"
-
 LINE_OF_SIGHT = False
-
 OBSTACLE_TYPE = "PEOPLE"
-
 TRAFFIC_REQUIREMENT = "TELEMETRY"
-
 TEST_DURATION_SECONDS = 20
-
 REPETITIONS = 1
-
 MAX_PAYLOAD_BYTES = 2048
-
 
 # ============================================================
 #                PROTOCOL / DEVICE SETTINGS
 # ============================================================
-
 PROTOCOL = "BLUETOOTH"
-
 RADIO_FAMILY = "BLUETOOTH_CLASSIC"
-
 SOURCE_NODE = "ESP32_A"
-
 DESTINATION_NODE = "ESP32_B"
-
 
 # ============================================================
 #             OTHER CONTROLLED METADATA
 # ============================================================
-
 MOBILITY = "STATIC"
-
 INTERFERENCE_LEVEL = "LOW"
-
 QOS_PRIORITY = "NORMAL"
-
 REQUIRED_LATENCY_MS = None
-
 REQUIRED_THROUGHPUT_KBPS = None
-
 RELIABILITY_REQUIREMENT = None
-
 POWER_PRIORITY = "NORMAL"
-
 RANGE_REQUIREMENT_M = None
-
 TX_POWER_DBM = None
-
 
 # ============================================================
 #                  POWER MEASUREMENTS
 # ============================================================
-
 BATTERY_VOLTAGE = 3.3
-
 
 # ============================================================
 #                PROTOCOL-SPECIFIC VALUES
 # ============================================================
-
 WIFI_CHANNEL = None
-
 BLE_PHY = None
-
 BT_MODE = "SPP"
-
 LORA_SF = None
-
 LORA_BW = None
-
 LORA_CR = None
-
 CELLULAR_GENERATION = None
-
 CELL_SIGNAL_DBM = None
-
 
 # ============================================================
 #                  SERIAL CONFIGURATION
 # ============================================================
-
 SERIAL_PORT = "COM3"
-
 BAUD_RATE = 115200
-
 
 # ============================================================
 #                    API CONFIGURATION
 # ============================================================
-
-API_BASE_URL = (
-    "http://100.120.114.19:8000"
-)
-
-MEASUREMENT_ENDPOINT = (
-    f"{API_BASE_URL}/measurements"
-)
-
+API_BASE_URL = ("http://100.120.114.19:8000")
+MEASUREMENT_ENDPOINT = (f"{API_BASE_URL}/measurements")
 HTTP_TIMEOUT_SECONDS = 5
-
 
 # ============================================================
 #                  LOCAL FAILURE BACKUP
 # ============================================================
-
-FAILED_FILE = Path(
-    "E:/Projects/Project_Nexora/Data_Feed/errors/"
-    "failed_measurements.jsonl"
-)
-
+FAILED_FILE = Path("E:/Projects/Project_Nexora/Data_Feed/errors/" "failed_measurements.jsonl")
 
 # ============================================================
 #                   PACKET DATA MODEL
