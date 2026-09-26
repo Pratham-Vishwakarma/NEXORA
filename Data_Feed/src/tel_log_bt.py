@@ -13,15 +13,15 @@ from serial import SerialException
 # ============================================================
 #                EXPERIMENT VARIABLES
 # ============================================================
-DISTANCE_M = 0.0
+DISTANCE_M = 10.0
 PAYLOAD_BYTES = 2048
 PACKET_INTERVAL_MS = 1000
-ENVIRONMENT = "INDOOR"
+ENVIRONMENT = "OPEN"
 LINE_OF_SIGHT = False
-OBSTACLE_TYPE = "PEOPLE"
+OBSTACLE_TYPE = "WALL"
 TRAFFIC_REQUIREMENT = "TELEMETRY"
 TEST_DURATION_SECONDS = 20
-REPETITIONS = 1
+REPETITIONS = 3
 MAX_PAYLOAD_BYTES = 2048
 
 # ============================================================
@@ -71,7 +71,7 @@ BAUD_RATE = 115200
 # ============================================================
 #                    API CONFIGURATION
 # ============================================================
-API_BASE_URL = ("http://100.120.114.19:8000")
+API_BASE_URL = ("http://100.72.37.28:8000")
 MEASUREMENT_ENDPOINT = (f"{API_BASE_URL}/measurements")
 HTTP_TIMEOUT_SECONDS = 5
 
