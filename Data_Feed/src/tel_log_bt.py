@@ -1801,12 +1801,16 @@ def collect_repetition(
     window.start()
 
 
-    deadline = (
+    start_time = window.started_at
 
-        window.started_at
+    if start_time is None:
 
-        + TEST_DURATION_SECONDS
-    )
+        raise RuntimeError(
+            "Measurement window did not start"
+        )
+
+
+    deadline = ( start_time + TEST_DURATION_SECONDS )
 
 
     print()
