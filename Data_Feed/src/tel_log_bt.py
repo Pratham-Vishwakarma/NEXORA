@@ -21,15 +21,15 @@ from serial import SerialException
 
 DISTANCE_M = 0.0
 
-PAYLOAD_BYTES = 16
+PAYLOAD_BYTES = 2048
 
-PACKET_INTERVAL_MS = 100
+PACKET_INTERVAL_MS = 1000
 
 ENVIRONMENT = "INDOOR"
 
-LINE_OF_SIGHT = True
+LINE_OF_SIGHT = False
 
-OBSTACLE_TYPE = None
+OBSTACLE_TYPE = "PEOPLE"
 
 TRAFFIC_REQUIREMENT = "TELEMETRY"
 
@@ -118,7 +118,7 @@ BAUD_RATE = 115200
 # ============================================================
 
 API_BASE_URL = (
-    "http://100.72.37.28:8000"
+    "http://100.120.114.19:8000"
 )
 
 MEASUREMENT_ENDPOINT = (
