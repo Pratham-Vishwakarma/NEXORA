@@ -19,26 +19,16 @@ from serial import SerialException
 #                EXPERIMENT VARIABLES
 # ============================================================
 
-DISTANCE_M = 1.0
-
+DISTANCE_M = 3.0
 PAYLOAD_BYTES = 2048
-
 PACKET_INTERVAL_MS = 1000
-
 ENVIRONMENT = "INDOOR"
-
 LINE_OF_SIGHT = False
-
-OBSTACLE_TYPE = "PEOPLE"
-
+OBSTACLE_TYPE = "WALL"
 TRAFFIC_REQUIREMENT = "TELEMETRY"
-
 TEST_DURATION_SECONDS = 20
-
 REPETITIONS = 3
-
 MAX_PAYLOAD_BYTES = 2048
-
 
 # ============================================================
 #                PROTOCOL / DEVICE SETTINGS
@@ -109,7 +99,7 @@ CELL_SIGNAL_DBM = None
 #                  SERIAL CONFIGURATION
 # ============================================================
 
-SERIAL_PORT = "COM3"
+SERIAL_PORT = "COM5"
 
 BAUD_RATE = 115200
 
