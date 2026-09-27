@@ -7,8 +7,8 @@
 // ============================================================
 // WIFI CONFIGURATION
 // ============================================================
-const char* WIFI_SSID = "IoT Lab";
-const char* WIFI_PASSWORD = "iot108lab";
+const char* WIFI_SSID = "OneplusNord3";
+const char* WIFI_PASSWORD = "Thisismyhotspotpasskey@125940";
 const uint16_t LISTEN_PORT = 5005;
 
 // ============================================================

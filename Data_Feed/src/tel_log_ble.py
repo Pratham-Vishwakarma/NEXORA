@@ -19,7 +19,7 @@ from serial import SerialException
 #                EXPERIMENT VARIABLES
 # ============================================================
 
-DISTANCE_M = 3.0
+DISTANCE_M = 5.0
 PAYLOAD_BYTES = 2048
 PACKET_INTERVAL_MS = 1000
 ENVIRONMENT = "INDOOR"
