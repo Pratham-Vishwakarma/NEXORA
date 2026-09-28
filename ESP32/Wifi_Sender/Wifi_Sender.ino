@@ -4,11 +4,11 @@
 // ============================================================
 // Wi-Fi configuration
 // ============================================================
-const char* WIFI_SSID = "IoT Lab";
-const char* WIFI_PASSWORD = "iot108lab";
+const char* WIFI_SSID = "OneplusNord3";
+const char* WIFI_PASSWORD = "Thisismyhotspotpasskey@125940";
 
 // Receiver ESP32 IP
-IPAddress RECEIVER_IP(192, 168, 12, 93);
+IPAddress RECEIVER_IP(10, 47, 11, 71);
 const uint16_t RECEIVER_PORT = 5005;
 const uint16_t LOCAL_PORT = 5006;
 
