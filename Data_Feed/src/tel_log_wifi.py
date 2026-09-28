@@ -13,15 +13,15 @@ from serial import SerialException
 # ============================================================
 #                EXPERIMENT VARIABLES
 # ============================================================
-DISTANCE_M = 0.0
-PAYLOAD_BYTES = 16
-PACKET_INTERVAL_MS = 100
+DISTANCE_M = 5.0
+PAYLOAD_BYTES = 1024
+PACKET_INTERVAL_MS = 1000
 ENVIRONMENT = "INDOOR"
 LINE_OF_SIGHT = True
 OBSTACLE_TYPE = None
 TRAFFIC_REQUIREMENT = "TELEMETRY"
 TEST_DURATION_SECONDS = 20
-REPETITIONS = 3
+REPETITIONS = 2
 MAX_PAYLOAD_BYTES = 2048
 # ============================================================
 #                PROTOCOL / DEVICE SETTINGS
@@ -66,12 +66,12 @@ CELL_SIGNAL_DBM = None
 # ============================================================
 #                  SERIAL CONFIGURATION
 # ============================================================
-SERIAL_PORT = "COM5"
+SERIAL_PORT = "COM3"
 BAUD_RATE = 115200
 # ============================================================
 #                    API CONFIGURATION
 # ============================================================
-API_BASE_URL = "http://100.120.114.19:8000"
+API_BASE_URL = "http://169.254.83.107:8000"
 MEASUREMENT_ENDPOINT = (f"{API_BASE_URL}/measurements")
 HTTP_TIMEOUT_SECONDS = 5
 
