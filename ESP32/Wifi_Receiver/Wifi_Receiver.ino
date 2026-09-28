@@ -1,7 +1,6 @@
 #include <WiFi.h>
 // Current/power sensing is performed on the sender ESP32.
 // Therefore no ACS712-specific receiver changes are required.
-
 #include <WiFiUdp.h>
 
 // ============================================================
